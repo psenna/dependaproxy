@@ -1,0 +1,9 @@
+upstream: https://registry.npmjs.org
+storage:
+  type: postgres
+  dsn: "postgres://u:p@host:5432/db?sslmode=disable"
+validation:
+  - type: ""
+    params: {}
+retrieval:
+  - type: upstream-registry

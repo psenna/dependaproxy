@@ -1,0 +1,10 @@
+storage:
+  type: postgres
+  dsn: "postgres://u:p@host:5432/db?sslmode=disable"
+upstream: ""
+validation:
+  - type: min-publication-age
+    params:
+      min_days: 7
+retrieval:
+  - type: upstream-registry

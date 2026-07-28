@@ -1,0 +1,40 @@
+# DependaProxy v1 example configuration.
+
+server:
+  addr: ":8080"
+
+# Static bearer token for protected routes (packument + tarball). Clients send
+# `Authorization: Bearer <token>`. Empty/omit to disable auth (local dev only).
+auth:
+  token: "change-me"
+
+# v1 only supports PostgreSQL.
+storage:
+  type: postgres
+  dsn: "postgres://dependaproxy:secret@postgres:5432/dependaproxy?sslmode=disable"
+
+# v1 only supports the npm registry. Default if omitted.
+registry: npm
+
+# Upstream registry to fetch from / validate against.
+upstream: https://registry.npmjs.org
+
+log:
+  level: info   # debug | info | warn | error
+  format: json  # json | text
+
+# Validation pipeline (runs in order). v1 ships min-publication-age.
+validation:
+  - type: min-publication-age
+    params:
+      min_days: 7
+
+# Retrieval pipeline (runs in order; local-disk-cache before upstream-registry).
+retrieval:
+  - type: local-disk-cache
+    params:
+      path: /var/lib/dependaproxy/cache
+  - type: upstream-registry
+
+# Mutation pipeline. v1 is empty (a no-op is injected automatically).
+mutation: []
