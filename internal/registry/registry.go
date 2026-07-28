@@ -4,12 +4,24 @@
 package registry
 
 import (
+	"context"
 	"errors"
+	"io"
 	"time"
 )
 
 // ErrNotFound is returned when a package or version does not exist upstream.
 var ErrNotFound = errors.New("registry: not found")
+
+// RegistryClient fetches package metadata and artifacts from an upstream
+// registry. Implementations must honor ctx for cancellation/timeout.
+type RegistryClient interface {
+	// FetchPackument returns the package metadata document, or ErrNotFound.
+	FetchPackument(ctx context.Context, name string) (*Packument, error)
+	// FetchTarball streams the package tarball; the caller must close the
+	// ReadCloser. contentLength is -1 if unknown.
+	FetchTarball(ctx context.Context, tarballURL string) (io.ReadCloser, int64, error)
+}
 
 // Packument is the npm registry package metadata document.
 type Packument struct {
