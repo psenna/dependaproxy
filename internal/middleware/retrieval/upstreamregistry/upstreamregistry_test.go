@@ -28,6 +28,10 @@ func (f *fakeClient) FetchPackument(_ context.Context, _ string) (*registry.Pack
 	return f.packument, nil
 }
 
+func (f *fakeClient) FetchPackumentRaw(_ context.Context, _ string) ([]byte, error) {
+	return nil, nil // unused by the upstream-registry middleware
+}
+
 func (f *fakeClient) FetchTarball(_ context.Context, _ string) (io.ReadCloser, int64, error) {
 	f.tarCalls++
 	if f.tarErr != nil {

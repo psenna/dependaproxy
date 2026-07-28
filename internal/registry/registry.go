@@ -16,8 +16,13 @@ var ErrNotFound = errors.New("registry: not found")
 // RegistryClient fetches package metadata and artifacts from an upstream
 // registry. Implementations must honor ctx for cancellation/timeout.
 type RegistryClient interface {
-	// FetchPackument returns the package metadata document, or ErrNotFound.
+	// FetchPackument returns the package metadata document (trimmed to the
+	// fields DependaProxy needs), or ErrNotFound. Used by validation/retrieval.
 	FetchPackument(ctx context.Context, name string) (*Packument, error)
+	// FetchPackumentRaw returns the full upstream packument JSON verbatim. Used
+	// by the packument route to serve clients (which need every field, e.g.
+	// dependencies), with dist.tarball rewritten to point at the proxy.
+	FetchPackumentRaw(ctx context.Context, name string) ([]byte, error)
 	// FetchTarball streams the package tarball; the caller must close the
 	// ReadCloser. contentLength is -1 if unknown.
 	FetchTarball(ctx context.Context, tarballURL string) (io.ReadCloser, int64, error)
