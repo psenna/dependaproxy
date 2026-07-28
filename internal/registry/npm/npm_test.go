@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -94,6 +95,18 @@ func TestFetchPackumentNotFound(t *testing.T) {
 	_, err := c.FetchPackument(context.Background(), "missing")
 	if err != registry.ErrNotFound {
 		t.Fatalf("err = %v want ErrNotFound", err)
+	}
+}
+
+func TestFetchPackumentRaw(t *testing.T) {
+	srv, _ := newServer(t)
+	c, _ := New(srv.URL, nil)
+	raw, err := c.FetchPackumentRaw(context.Background(), "@scope/pkg")
+	if err != nil {
+		t.Fatalf("fetch raw: %v", err)
+	}
+	if !strings.Contains(string(raw), `"@scope/pkg"`) {
+		t.Errorf("raw packument missing name: %q", raw)
 	}
 }
 
