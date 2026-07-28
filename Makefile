@@ -3,18 +3,22 @@
 # The host has no Go toolchain, so every Go target runs inside a disposable
 # golang container against the rootless DinD daemon (DOCKER_HOST is set in the
 # ai-sandbox env). The repo lives under /workspace, which is the only path the
-# daemon can see, so we bind-mount the repo directory as /work and put the Go
-# build/module caches under .gocache/ (gitignored) so they persist across runs.
+# daemon can see, so we bind-mount the repo directory as /work.
+#
+# Go build/module/binary caches live in a named Docker volume (not inside the
+# repo), so they persist across runs without polluting the working tree (which
+# would make gofmt/golangci-lint scan the module-cache testdata).
 
 GOLANG_IMAGE  ?= golang:1.25
 POSTGRES_IMAGE ?= postgres:18
 DOCKER        ?= docker
 
 CURDIR        := $(shell pwd)
-CACHE         := $(CURDIR)/.gocache
+GOCACHE_VOL   := dependaproxy-gocache
 DOCKER_RUN    := $(DOCKER) run --rm -v "$(CURDIR):/work" -w /work \
-	-e GOCACHE=$(CACHE)/build -e GOMODCACHE=$(CACHE)/mod -e GOBIN=$(CACHE)/bin \
-	-e PATH=$(CACHE)/bin:/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+	-v $(GOCACHE_VOL):/gc \
+	-e GOCACHE=/gc/build -e GOMODCACHE=/gc/mod -e GOBIN=/gc/bin \
+	-e PATH=/gc/bin:/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
 	$(GOLANG_IMAGE)
 # The race detector needs CGo (it links the race runtime via gcc). The
 # golang:1.25 image ships gcc, so enable CGo only for the race test target.
@@ -36,6 +40,9 @@ test:
 vet:
 	$(DOCKER_RUN) go vet ./...
 
+# gofmt only the repo's Go files (not the module cache, which lives in a
+# named volume outside the tree, so a plain `gofmt -l .` would also work —
+# but the explicit list is unambiguous and matches CI semantics).
 fmt-check:
 	$(DOCKER_RUN) sh -c 'test -z "$$(gofmt -l .)" || { echo "gofmt drift:"; gofmt -l .; exit 1; }'
 
@@ -70,4 +77,4 @@ stop-db:
 	$(DOCKER) rm -f dependaproxy-pg
 
 clean:
-	rm -rf .gocache cover.out cover.html
+	rm -rf cover.out cover.html
