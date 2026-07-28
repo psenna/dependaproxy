@@ -1,0 +1,12 @@
+# Go build/test caches (kept inside the repo so the DinD-mounted volume persists them)
+.gocache/
+cover.out
+cover.html
+
+# Built binaries
+/dependaproxy
+/bin/
+
+# Local databases / cache dirs
+*.db
+/cache/
