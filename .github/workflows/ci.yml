@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "feat/*"]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  GO_VERSION: "1.25"
+  # golangci-lint is installed via `go install` so it is built with the same
+  # Go toolchain as the project (a prebuilt v2.0.x binary is built with go1.24
+  # and refuses a go1.25 target).
+  GOLANGCI_LINT_VERSION: "v2.12.2"
+
+jobs:
+  build-test:
+    name: lint + test + race + coverage
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: secret
+          POSTGRES_DB: dependaproxy
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d dependaproxy"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      # Storage/integration tests connect to the service container.
+      DP_TEST_PG_DSN: "postgres://postgres:secret@localhost:5432/dependaproxy?sslmode=disable"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: gofmt
+        run: |
+          fmt=$(gofmt -l .)
+          if [ -n "$fmt" ]; then
+            echo "gofmt drift in:"
+            echo "$fmt"
+            exit 1
+          fi
+
+      - name: golangci-lint
+        run: |
+          go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@${{ env.GOLANGCI_LINT_VERSION }}
+          golangci-lint run ./...
+
+      - name: govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
+
+      - name: test (race + coverage)
+        env:
+          # The race detector links the race runtime via gcc (present on the
+          # ubuntu runner), so it needs CGo even though the project itself is CGo-free.
+          CGO_ENABLED: "1"
+        run: go test -race -coverprofile=cover.out ./...
+
+      - name: coverage summary
+        run: go tool cover -func=cover.out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: cover.out
