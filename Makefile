@@ -20,8 +20,10 @@ DOCKER_RUN    := $(DOCKER) run --rm -v "$(CURDIR):/work" -w /work \
 # golang:1.25 image ships gcc, so enable CGo only for the race test target.
 DOCKER_RUN_RACE := $(DOCKER_RUN) -e CGO_ENABLED=1
 
-# Pin tool versions for reproducibility.
-GOLANGCI_LINT_VERSION := v2.0.2
+# Pin tool versions for reproducibility. golangci-lint is installed via
+# `go install` so it is built with the project's Go toolchain (a prebuilt
+# v2.0.x binary is built with go1.24 and refuses a go1.25 target).
+GOLANGCI_LINT_VERSION := v2.12.2
 GOVULNCHECK_VERSION   := latest
 
 .PHONY: all test vet fmt-check lint vuln tidy run db stop-db clean
@@ -40,11 +42,12 @@ fmt-check:
 tidy:
 	$(DOCKER_RUN) go mod tidy
 
-# Installs golangci-lint into the mounted cache and runs it.
+# Installs golangci-lint into the mounted cache (built with the project's Go)
+# and runs it.
 lint:
 	$(DOCKER_RUN) sh -c '\
 		test -x $$GOBIN/golangci-lint || \
-		curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/$(GOLANGCI_LINT_VERSION)/install.sh | sh -s -- -b $$GOBIN $(GOLANGCI_LINT_VERSION); \
+		go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION); \
 		golangci-lint run ./...'
 
 # Installs govulncheck into the mounted cache and runs it.
