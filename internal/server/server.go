@@ -1,86 +1,61 @@
+// Package server is the multi-registry HTTP front door. It builds the
+// configured registry adapters, mounts each at its URL path prefix, and wraps
+// everything in the shared token auth (with /healthz open).
 package server
 
 import (
 	"context"
+	"database/sql"
 	"log/slog"
+	"net/http"
+	"strings"
 	"time"
 
+	"github.com/psenna/dependaproxy/internal/adapter"
 	"github.com/psenna/dependaproxy/internal/config"
 	"github.com/psenna/dependaproxy/internal/log"
-	"github.com/psenna/dependaproxy/internal/middleware/mutation"
-	"github.com/psenna/dependaproxy/internal/middleware/retrieval/localcache"
-	"github.com/psenna/dependaproxy/internal/middleware/retrieval/upstreamregistry"
-	"github.com/psenna/dependaproxy/internal/middleware/validation/minpublicationage"
-	"github.com/psenna/dependaproxy/internal/pipeline"
-	"github.com/psenna/dependaproxy/internal/registry"
-	"github.com/psenna/dependaproxy/internal/storage"
 )
 
-// evicter is implemented by cache middleware that can drop a cached artifact
-// when it fails integrity verification. localcache.Middleware satisfies it.
-type evicter interface {
-	Evict(ctx *pipeline.PipelineContext) error
-}
-
-// Server wires the configured pipelines, storage, and registry client and
-// serves the npm-compatible proxy routes.
+// Server is the aggregate HTTP server for all configured registries.
 type Server struct {
-	cfg        *config.Config
-	storage    storage.Storage
-	reg        registry.RegistryClient
-	validation pipeline.ValidationPipeline
-	retrieval  pipeline.RetrievalPipeline
-	mutation   pipeline.MutationPipeline
-	cache      evicter // nil if no cache middleware is configured
-	logger     *slog.Logger
-	now        func() time.Time
+	cfg      *config.Config
+	db       *sql.DB
+	adapters []adapter.Adapter
+	logger   *slog.Logger
 }
 
-// New builds a Server from config, an open Storage, and a registry client.
-func New(ctx context.Context, cfg *config.Config, st storage.Storage, rc registry.RegistryClient) (*Server, error) {
+// New opens no resources itself; it builds the adapters from cfg using the
+// shared db pool. The caller owns db (or hands it to Close).
+func New(ctx context.Context, cfg *config.Config, db *sql.DB) (*Server, error) {
 	logger := log.New(cfg.Log.Format, cfg.Log.Level)
-
-	reg := pipeline.NewRegistry()
-	reg.RegisterValidation("min-publication-age", minpublicationage.Factory)
-	reg.RegisterRetrieval("local-disk-cache", localcache.Factory)
-	reg.RegisterRetrieval("upstream-registry", upstreamregistry.Factory(rc))
-	reg.RegisterMutation("noop", mutation.Factory)
-
-	validation, err := reg.BuildValidation(cfg.Validation)
+	deps := adapter.Deps{DB: db, Logger: logger, Now: func() time.Time { return time.Now().UTC() }}
+	adapters, err := adapter.Build(cfg.Registries, deps)
 	if err != nil {
 		return nil, err
 	}
-	retrieval, err := reg.BuildRetrieval(cfg.Retrieval)
-	if err != nil {
-		return nil, err
-	}
-	mp, err := reg.BuildMutation(cfg.Mutation)
-	if err != nil {
-		return nil, err
-	}
-	// v1 ships a single no-op mutation so the PreFetch/PostFetch hook path is
-	// exercised; a future real mutation middleware slots in via config.
-	if len(cfg.Mutation) == 0 {
-		mp.Chain = []pipeline.MutationMiddleware{mutation.NoOp{}}
-	}
-
-	var cache evicter
-	if e, ok := retrieval.Head.(evicter); ok {
-		cache = e
-	}
-
-	return &Server{
-		cfg:        cfg,
-		storage:    st,
-		reg:        rc,
-		validation: validation,
-		retrieval:  retrieval,
-		mutation:   mp,
-		cache:      cache,
-		logger:     logger,
-		now:        func() time.Time { return time.Now().UTC() },
-	}, nil
+	return &Server{cfg: cfg, db: db, adapters: adapters, logger: logger}, nil
 }
 
-// Close releases the storage backend.
-func (s *Server) Close() error { return s.storage.Close() }
+// Handler returns the HTTP handler: /healthz (open) + one mount per adapter at
+// its prefix, all wrapped by TokenAuth (shared token, /healthz exempt).
+func (s *Server) Handler() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		_, _ = w.Write([]byte("ok"))
+	})
+	for _, a := range s.adapters {
+		prefix := strings.TrimRight(a.Prefix(), "/")
+		mux.Handle(prefix+"/", http.StripPrefix(prefix, a.Handler()))
+	}
+	exempt := func(p string) bool { return p == "/healthz" }
+	return TokenAuth(s.cfg.Auth.Token, exempt, s.logger, mux)
+}
+
+// Close releases the shared database pool.
+func (s *Server) Close() error {
+	if s.db == nil {
+		return nil
+	}
+	return s.db.Close()
+}

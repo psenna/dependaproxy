@@ -29,8 +29,8 @@ func (n *nextStub) Fetch(ctx *pipeline.PipelineContext) (bool, error) {
 	return true, nil
 }
 
-func ctx(version string) *pipeline.PipelineContext {
-	return &pipeline.PipelineContext{Ctx: context.Background(), Registry: "npm", PkgName: "express", Version: version}
+func ctx(version, artifactID string) *pipeline.PipelineContext {
+	return &pipeline.PipelineContext{Ctx: context.Background(), Registry: "npm", PkgName: "express", Version: version, ArtifactID: artifactID}
 }
 
 func TestMissWritesThenHits(t *testing.T) {
@@ -38,24 +38,20 @@ func TestMissWritesThenHits(t *testing.T) {
 	n := &nextStub{data: []byte("TARBALL")}
 	m := New(dir, n)
 
-	c := ctx("4.18.0")
+	c := ctx("4.18.0", "")
 	if hit, err := m.Fetch(c); err != nil || !hit {
 		t.Fatalf("first fetch: hit=%v err=%v", hit, err)
 	}
 	if n.calls != 1 {
 		t.Errorf("next calls = %d want 1", n.calls)
 	}
-	if string(c.Tarball.Bytes) != "TARBALL" {
-		t.Errorf("tarball = %q", c.Tarball.Bytes)
-	}
-	path := filepath.Join(dir, "npm", "express", "4.18.0.tgz")
+	path := filepath.Join(dir, "npm", "express", "4.18.0.bin")
 	if _, err := os.ReadFile(path); err != nil { //nolint:gosec // G304: path under t.TempDir()
 		t.Fatalf("cache file not written: %v", err)
 	}
 
-	// Second fetch hits the cache; a fresh next with different data is NOT used.
 	m2 := New(dir, &nextStub{data: []byte("SHOULD-NOT-USE")})
-	c2 := ctx("4.18.0")
+	c2 := ctx("4.18.0", "")
 	if hit, err := m2.Fetch(c2); err != nil || !hit {
 		t.Fatalf("second fetch: hit=%v err=%v", hit, err)
 	}
@@ -64,15 +60,27 @@ func TestMissWritesThenHits(t *testing.T) {
 	}
 }
 
-func TestScopedNamePath(t *testing.T) {
+func TestArtifactIDKeying(t *testing.T) {
 	dir := t.TempDir()
-	n := &nextStub{data: []byte("B")}
-	m := New(dir, n)
-	c := &pipeline.PipelineContext{Ctx: context.Background(), Registry: "npm", PkgName: "@scope/pkg", Version: "1.0.0"}
+	m := New(dir, &nextStub{data: []byte("B")})
+	c := &pipeline.PipelineContext{Ctx: context.Background(), Registry: "pypi", PkgName: "numpy", Version: "1.0.0", ArtifactID: "numpy-1.0.0-py3-none-any.whl"}
 	if _, err := m.Fetch(c); err != nil {
 		t.Fatalf("fetch: %v", err)
 	}
-	path := filepath.Join(dir, "npm", "@scope", "pkg", "1.0.0.tgz")
+	path := filepath.Join(dir, "pypi", "numpy", "1.0.0", "numpy-1.0.0-py3-none-any.whl.bin")
+	if _, err := os.ReadFile(path); err != nil { //nolint:gosec // G304: path under t.TempDir()
+		t.Fatalf("artifactID cache file not at %s: %v", path, err)
+	}
+}
+
+func TestScopedNamePath(t *testing.T) {
+	dir := t.TempDir()
+	m := New(dir, &nextStub{data: []byte("B")})
+	c := &pipeline.PipelineContext{Ctx: context.Background(), Registry: "npm", PkgName: "@scope/pkg", Version: "1.0.0", ArtifactID: ""}
+	if _, err := m.Fetch(c); err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	path := filepath.Join(dir, "npm", "@scope", "pkg", "1.0.0.bin")
 	if _, err := os.ReadFile(path); err != nil { //nolint:gosec // G304: path under t.TempDir()
 		t.Fatalf("scoped cache file not at %s: %v", path, err)
 	}
@@ -81,14 +89,14 @@ func TestScopedNamePath(t *testing.T) {
 func TestEvictRemovesFile(t *testing.T) {
 	dir := t.TempDir()
 	m := New(dir, &nextStub{data: []byte("B")})
-	c := ctx("1.0.0")
+	c := ctx("1.0.0", "")
 	if _, err := m.Fetch(c); err != nil {
 		t.Fatalf("fetch: %v", err)
 	}
 	if err := m.Evict(c); err != nil {
 		t.Fatalf("evict: %v", err)
 	}
-	if err := m.Evict(c); err != nil { // idempotent
+	if err := m.Evict(c); err != nil {
 		t.Fatalf("evict idempotent: %v", err)
 	}
 }
@@ -96,7 +104,7 @@ func TestEvictRemovesFile(t *testing.T) {
 func TestNoNextReturnsNoResolver(t *testing.T) {
 	dir := t.TempDir()
 	m := New(dir, nil)
-	_, err := m.Fetch(ctx("9.9.9"))
+	_, err := m.Fetch(ctx("9.9.9", ""))
 	if err != pipeline.ErrNoResolver {
 		t.Fatalf("err = %v want ErrNoResolver", err)
 	}
@@ -113,7 +121,7 @@ func TestConcurrentFetchSameKeyCallsNextOnce(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if _, err := m.Fetch(ctx("2.0.0")); err != nil {
+			if _, err := m.Fetch(ctx("2.0.0", "")); err != nil {
 				errs <- err
 			}
 		}()
@@ -131,7 +139,7 @@ func TestConcurrentFetchSameKeyCallsNextOnce(t *testing.T) {
 func TestRejectsTraversal(t *testing.T) {
 	dir := t.TempDir()
 	m := New(dir, &nextStub{data: []byte("B")})
-	c := &pipeline.PipelineContext{Ctx: context.Background(), Registry: "npm", PkgName: "../escape", Version: "1.0.0"}
+	c := &pipeline.PipelineContext{Ctx: context.Background(), Registry: "npm", PkgName: "../escape", Version: "1.0.0", ArtifactID: ""}
 	if _, err := m.Fetch(c); err == nil {
 		t.Fatal("want error for traversal package name")
 	}

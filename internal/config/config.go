@@ -1,11 +1,9 @@
 // Package config loads and validates DependaProxy's YAML configuration.
 //
-// Config is intentionally a pure data + structural-validation layer: it knows
-// the shape of the configuration and the v1 invariants (registry must be npm,
-// storage must be postgres, required fields, non-empty middleware types) but
-// it does NOT know which middleware type names are valid — that belongs to the
-// pipeline builder (internal/pipeline), which owns the middleware factory
-// registry. This keeps config decoupled from every middleware package.
+// v2 is multi-registry: the top-level `registries:` list selects which registry
+// adapters are enabled (npm, pypi, maven, ...), each with its own prefix,
+// upstream, and middleware ordering. Shared server/auth/storage/log apply to
+// the whole instance.
 package config
 
 import (
@@ -18,15 +16,11 @@ import (
 
 // Config is the parsed, validated configuration.
 type Config struct {
-	Server     Server       `yaml:"server"`
-	Auth       Auth         `yaml:"auth"`
-	Storage    Storage      `yaml:"storage"`
-	Registry   string       `yaml:"registry"`
-	Upstream   string       `yaml:"upstream"`
-	Log        Log          `yaml:"log"`
-	Validation []Middleware `yaml:"validation"`
-	Retrieval  []Middleware `yaml:"retrieval"`
-	Mutation   []Middleware `yaml:"mutation"`
+	Server     Server           `yaml:"server"`
+	Auth       Auth             `yaml:"auth"`
+	Storage    Storage          `yaml:"storage"`
+	Log        Log              `yaml:"log"`
+	Registries []RegistryConfig `yaml:"registries"`
 }
 
 // Server is the HTTP listener config.
@@ -34,12 +28,13 @@ type Server struct {
 	Addr string `yaml:"addr"`
 }
 
-// Auth holds the optional static bearer token. An empty token disables auth.
+// Auth holds the optional static bearer token (shared across all registries).
+// An empty token disables auth.
 type Auth struct {
 	Token string `yaml:"token"`
 }
 
-// Storage is the persistence backend config. v1 only supports postgres.
+// Storage is the shared persistence backend config. v2 only supports postgres.
 type Storage struct {
 	Type string `yaml:"type"`
 	DSN  string `yaml:"dsn"`
@@ -51,6 +46,16 @@ type Log struct {
 	Format string `yaml:"format"`
 }
 
+// RegistryConfig configures one registry adapter.
+type RegistryConfig struct {
+	Type       string       `yaml:"type"`     // adapter type: npm, pypi, maven, ...
+	Prefix     string       `yaml:"prefix"`   // URL path prefix, e.g. "/npm"
+	Upstream   string       `yaml:"upstream"` // upstream registry URL
+	Validation []Middleware `yaml:"validation"`
+	Retrieval  []Middleware `yaml:"retrieval"`
+	Mutation   []Middleware `yaml:"mutation"`
+}
+
 // Middleware is one entry in an ordered pipeline. Params is kept as a raw
 // yaml.Node so each middleware's factory decodes its own typed parameters.
 type Middleware struct {
@@ -60,7 +65,6 @@ type Middleware struct {
 
 // Load reads, parses and validates the configuration file at path.
 func Load(path string) (*Config, error) {
-	// path is an operator-supplied config file path, not untrusted input.
 	data, err := os.ReadFile(path) //nolint:gosec // G304: config path is trusted operator input
 	if err != nil {
 		return nil, fmt.Errorf("read config %s: %w", path, err)
@@ -75,30 +79,41 @@ func Load(path string) (*Config, error) {
 	return &c, nil
 }
 
-// Validate enforces the v1 structural invariants.
+// Validate enforces the structural invariants. Known registry types are
+// checked by the adapter registry (internal/adapter), not here, to avoid an
+// import cycle (adapter imports config).
 func (c *Config) Validate() error {
 	var errs []string
 
-	if strings.TrimSpace(c.Upstream) == "" {
-		errs = append(errs, "upstream is required")
-	}
 	if c.Storage.Type != "postgres" {
-		errs = append(errs, fmt.Sprintf("storage.type must be %q for v1 (got %q)", "postgres", c.Storage.Type))
+		errs = append(errs, fmt.Sprintf("storage.type must be %q for v2 (got %q)", "postgres", c.Storage.Type))
 	}
-	// v1 only supports the npm registry. Default empty -> npm for convenience.
-	if c.Registry == "" {
-		c.Registry = "npm"
-	} else if c.Registry != "npm" {
-		errs = append(errs, fmt.Sprintf("registry must be %q for v1 (got %q)", "npm", c.Registry))
+	if len(c.Registries) == 0 {
+		errs = append(errs, "at least one registry is required")
+	}
+	seen := map[string]bool{}
+	for i, r := range c.Registries {
+		if strings.TrimSpace(r.Type) == "" {
+			errs = append(errs, fmt.Sprintf("registries[%d]: type is required", i))
+		}
+		p := strings.TrimRight(r.Prefix, "/")
+		if p == "" {
+			errs = append(errs, fmt.Sprintf("registries[%d]: prefix is required", i))
+		} else if seen[p] {
+			errs = append(errs, fmt.Sprintf("registries[%d]: duplicate prefix %q", i, p))
+		} else {
+			seen[p] = true
+		}
+		if strings.TrimSpace(r.Upstream) == "" {
+			errs = append(errs, fmt.Sprintf("registries[%d]: upstream is required", i))
+		}
+		errs = append(errs, validateMiddlewares(fmt.Sprintf("registries[%d].validation", i), r.Validation)...)
+		errs = append(errs, validateMiddlewares(fmt.Sprintf("registries[%d].retrieval", i), r.Retrieval)...)
+		errs = append(errs, validateMiddlewares(fmt.Sprintf("registries[%d].mutation", i), r.Mutation)...)
 	}
 	if c.Server.Addr == "" {
 		c.Server.Addr = ":8080"
 	}
-
-	errs = append(errs, validateMiddlewares("validation", c.Validation)...)
-	errs = append(errs, validateMiddlewares("retrieval", c.Retrieval)...)
-	errs = append(errs, validateMiddlewares("mutation", c.Mutation)...)
-
 	if len(errs) > 0 {
 		return fmt.Errorf("invalid config: %s", strings.Join(errs, "; "))
 	}

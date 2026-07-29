@@ -1,16 +1,14 @@
 // Package pipeline is DependaProxy's orchestration core: it defines the
 // validation/retrieval/mutation middleware contracts, the registry that maps
 // config `type:` strings to middleware factories, and the runners that drive
-// the chains. Concrete middleware live in internal/middleware/* and implement
-// these interfaces (they import this package; this package does not import
-// them, so there is no import cycle).
+// the chains. It is registry-agnostic: per-registry data is carried as `any`
+// (Index/Artifact) and concrete middleware type-assert. This keeps a single
+// shared engine across all registry adapters (npm, pypi, maven, ...).
 package pipeline
 
 import (
 	"context"
 	"log/slog"
-
-	"github.com/psenna/dependaproxy/internal/registry"
 )
 
 // Tarball is the package artifact carried through the pipelines.
@@ -18,31 +16,36 @@ type Tarball struct {
 	Bytes []byte
 }
 
-// PipelineContext is the shared state passed through every pipeline. Each
-// middleware may read it and may populate fields for downstream middleware.
+// PipelineContext is the shared state passed through every pipeline. The
+// registry-specific metadata (Index) and matched artifact (Artifact) are
+// `any`; each adapter's middleware asserts them to its concrete types
+// (e.g. npm: *npm.Packument / *npm.Version; pypi: *pypi.Project / *pypi.File).
 type PipelineContext struct {
-	Ctx       context.Context
-	Log       *slog.Logger
-	Registry  string
-	PkgName   string
-	Version   string
-	Packument *registry.Packument
-	Tarball   *Tarball
-	Metadata  map[string]any
+	Ctx        context.Context
+	Log        *slog.Logger
+	Registry   string
+	PkgName    string
+	Version    string
+	ArtifactID string // pypi: filename; maven: "classifier:type"; npm: "" (name+version suffices)
+	Index      any    // registry-specific metadata document
+	Artifact   any    // registry-specific matched artifact ref
+	Tarball    *Tarball
+	Metadata   map[string]any
 }
 
 // NewPipelineContext constructs a context with a background ctx if none is
 // provided and an initialized Metadata map.
-func NewPipelineContext(ctx context.Context, log *slog.Logger, registryName, pkg, version string) *PipelineContext {
+func NewPipelineContext(ctx context.Context, log *slog.Logger, registryName, pkg, version, artifactID string) *PipelineContext {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	return &PipelineContext{
-		Ctx:      ctx,
-		Log:      log,
-		Registry: registryName,
-		PkgName:  pkg,
-		Version:  version,
-		Metadata: map[string]any{},
+		Ctx:        ctx,
+		Log:        log,
+		Registry:   registryName,
+		PkgName:    pkg,
+		Version:    version,
+		ArtifactID: artifactID,
+		Metadata:   map[string]any{},
 	}
 }

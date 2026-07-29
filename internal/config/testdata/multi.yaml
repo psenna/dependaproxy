@@ -1,0 +1,35 @@
+server:
+  addr: ":9090"
+auth:
+  token: "change-me"
+storage:
+  type: postgres
+  dsn: "postgres://u:p@host:5432/db?sslmode=disable"
+log:
+  level: info
+  format: json
+registries:
+  - type: npm
+    prefix: /npm
+    upstream: https://registry.npmjs.org
+    validation:
+      - type: min-publication-age
+        params:
+          min_days: 7
+    retrieval:
+      - type: local-disk-cache
+        params:
+          path: /cache/npm
+      - type: upstream-registry
+  - type: pypi
+    prefix: /pypi
+    upstream: https://pypi.org/simple
+    validation:
+      - type: min-publication-age
+        params:
+          min_days: 14
+    retrieval:
+      - type: local-disk-cache
+        params:
+          path: /cache/pypi
+      - type: upstream-registry
