@@ -1,5 +1,6 @@
-// Package main is the DependaProxy entrypoint: load config, open storage, build
-// the npm registry client and server, and serve.
+// Package main is the DependaProxy entrypoint: load config, open the shared
+// postgres pool, build the multi-registry server (npm/pypi/maven/... adapters),
+// and serve. Registry adapters register themselves via init() side effects.
 package main
 
 import (
@@ -14,9 +15,9 @@ import (
 	"time"
 
 	"github.com/psenna/dependaproxy/internal/config"
-	"github.com/psenna/dependaproxy/internal/registry/npm"
+	_ "github.com/psenna/dependaproxy/internal/registry/npm" // register the npm adapter
 	"github.com/psenna/dependaproxy/internal/server"
-	"github.com/psenna/dependaproxy/internal/storage"
+	"github.com/psenna/dependaproxy/internal/storage/db"
 )
 
 func main() {
@@ -30,24 +31,16 @@ func main() {
 	}
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	st, err := storage.OpenPostgres(ctx, cfg.Storage.DSN)
+	d, err := db.OpenPostgres(ctx, cfg.Storage.DSN)
 	if err != nil {
 		logger.Error("open storage", "err", err)
 		os.Exit(1)
 	}
-	defer func() { _ = st.Close() }()
 
-	regClient, err := npm.New(cfg.Upstream, nil)
-	if err != nil {
-		logger.Error("registry client", "err", err)
-		os.Exit(1)
-	}
-
-	srv, err := server.New(ctx, cfg, st, regClient)
+	srv, err := server.New(ctx, cfg, d)
 	if err != nil {
 		logger.Error("build server", "err", err)
 		os.Exit(1)
@@ -67,7 +60,7 @@ func main() {
 		_ = httpSrv.Shutdown(shutdownCtx)
 	}()
 
-	logger.Info("dependaproxy starting", "addr", cfg.Server.Addr, "upstream", cfg.Upstream)
+	logger.Info("dependaproxy starting", "addr", cfg.Server.Addr, "registries", len(cfg.Registries))
 	if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		logger.Error("serve", "err", err)
 		os.Exit(1)

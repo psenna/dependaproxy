@@ -104,7 +104,7 @@ func TestValidationOrderingAndShortCircuit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
-	err = p.Run(NewPipelineContext(context.Background(), nil, "npm", "pkg", "1.0.0"))
+	err = p.Run(NewPipelineContext(context.Background(), nil, "npm", "pkg", "1.0.0", ""))
 	if err == nil || err.Error() != `validation "v2": rejected` {
 		t.Fatalf("err = %v", err)
 	}
@@ -119,7 +119,7 @@ func TestValidationEmptyNoop(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
-	if err := p.Run(NewPipelineContext(context.Background(), nil, "npm", "pkg", "1.0.0")); err != nil {
+	if err := p.Run(NewPipelineContext(context.Background(), nil, "npm", "pkg", "1.0.0", "")); err != nil {
 		t.Fatalf("empty validation should pass, got %v", err)
 	}
 }
@@ -148,7 +148,7 @@ func TestRetrievalDecoratorWriteThrough(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
-	ctx := NewPipelineContext(context.Background(), nil, "npm", "pkg", "1.0.0")
+	ctx := NewPipelineContext(context.Background(), nil, "npm", "pkg", "1.0.0", "")
 	if err := p.Run(ctx); err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -177,7 +177,7 @@ func TestRetrievalCacheHitSkipsUpstream(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
-	ctx := NewPipelineContext(context.Background(), nil, "npm", "pkg", "1.0.0")
+	ctx := NewPipelineContext(context.Background(), nil, "npm", "pkg", "1.0.0", "")
 	if err := p.Run(ctx); err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -195,7 +195,7 @@ func TestRetrievalEmptyNoResolver(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
-	err = p.Run(NewPipelineContext(context.Background(), nil, "npm", "pkg", "1.0.0"))
+	err = p.Run(NewPipelineContext(context.Background(), nil, "npm", "pkg", "1.0.0", ""))
 	if !errors.Is(err, ErrNoResolver) {
 		t.Fatalf("err = %v, want ErrNoResolver", err)
 	}
@@ -211,7 +211,7 @@ func TestRetrievalUpstreamErrorAborts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
-	err = p.Run(NewPipelineContext(context.Background(), nil, "npm", "pkg", "1.0.0"))
+	err = p.Run(NewPipelineContext(context.Background(), nil, "npm", "pkg", "1.0.0", ""))
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("err = %v, want %v", err, wantErr)
 	}
@@ -253,7 +253,7 @@ func TestMutationPipelineOrder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
-	ctx := NewPipelineContext(context.Background(), nil, "npm", "pkg", "1.0.0")
+	ctx := NewPipelineContext(context.Background(), nil, "npm", "pkg", "1.0.0", "")
 	if err := p.RunPreFetch(ctx); err != nil {
 		t.Fatalf("pre: %v", err)
 	}
@@ -274,7 +274,7 @@ func TestMutationEmptyNoop(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
-	ctx := NewPipelineContext(context.Background(), nil, "npm", "pkg", "1.0.0")
+	ctx := NewPipelineContext(context.Background(), nil, "npm", "pkg", "1.0.0", "")
 	if err := p.RunPreFetch(ctx); err != nil {
 		t.Fatalf("pre: %v", err)
 	}

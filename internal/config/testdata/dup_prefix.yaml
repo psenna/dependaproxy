@@ -3,10 +3,12 @@ storage:
   dsn: "postgres://u:p@host:5432/db?sslmode=disable"
 registries:
   - type: npm
-    prefix: /npm
+    prefix: /x
     upstream: https://registry.npmjs.org
-    validation:
-      - type: ""
-        params: {}
+    retrieval:
+      - type: upstream-registry
+  - type: pypi
+    prefix: /x
+    upstream: https://pypi.org/simple
     retrieval:
       - type: upstream-registry

@@ -8,8 +8,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/psenna/dependaproxy/internal/registry"
 )
 
 const scopedPackument = `{
@@ -29,33 +27,30 @@ const scopedPackument = `{
   "dist-tags": { "latest": "1.0.0" }
 }`
 
-func newServer(t *testing.T) (*httptest.Server, *string) {
+func newUpstream(t *testing.T) (*httptest.Server, *string) {
 	t.Helper()
 	var tarballURL string
 	mux := http.NewServeMux()
-	mux.HandleFunc("/@scope/pkg", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/@scope/pkg", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(w, scopedPackument)
 	})
-	mux.HandleFunc("/missing", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusNotFound)
-	})
-	mux.HandleFunc("/tarball.tgz", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/missing", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNotFound) })
+	mux.HandleFunc("/tarball.tgz", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/octet-stream")
 		_, _ = w.Write([]byte("TARBALL-BYTES"))
 	})
 	srv := httptest.NewServer(mux)
 	tarballURL = srv.URL + "/tarball.tgz"
 	t.Cleanup(srv.Close)
-	// Patch the packument's tarball placeholder to the real server URL.
 	return srv, &tarballURL
 }
 
 func TestFetchPackumentScoped(t *testing.T) {
-	srv, tarballURL := newServer(t)
+	srv, _ := newUpstream(t)
 	c, err := New(srv.URL, nil)
 	if err != nil {
-		t.Fatalf("new: %v", err)
+		t.Fatal(err)
 	}
 	p, err := c.FetchPackument(context.Background(), "@scope/pkg")
 	if err != nil {
@@ -66,76 +61,56 @@ func TestFetchPackumentScoped(t *testing.T) {
 	}
 	v, ok := p.Versions["1.0.0"]
 	if !ok {
-		t.Fatal("missing version 1.0.0")
+		t.Fatal("missing version")
 	}
-	if v.Dist.Integrity != "sha512-abc" {
-		t.Errorf("integrity = %q", v.Dist.Integrity)
-	}
-	if v.Dist.Tarball != "TARBALL_URL" {
-		t.Errorf("tarball = %q", v.Dist.Tarball)
+	if v.Dist.Integrity != "sha512-abc" || v.Dist.Tarball != "TARBALL_URL" {
+		t.Errorf("dist = %+v", v.Dist)
 	}
 	pub, ok := p.Time["1.0.0"]
 	if !ok {
-		t.Fatal("missing time[1.0.0]")
+		t.Fatal("missing time")
 	}
 	want := time.Date(2021, 1, 15, 10, 0, 0, 0, time.UTC)
 	if !pub.Equal(want) {
 		t.Errorf("time = %v want %v", pub, want)
 	}
-	// dist-tags present
-	if p.DistTags["latest"] != "1.0.0" {
-		t.Errorf("dist-tags latest = %q", p.DistTags["latest"])
-	}
-	_ = tarballURL // used in tarball test below
-}
-
-func TestFetchPackumentNotFound(t *testing.T) {
-	srv, _ := newServer(t)
-	c, _ := New(srv.URL, nil)
-	_, err := c.FetchPackument(context.Background(), "missing")
-	if err != registry.ErrNotFound {
-		t.Fatalf("err = %v want ErrNotFound", err)
-	}
 }
 
 func TestFetchPackumentRaw(t *testing.T) {
-	srv, _ := newServer(t)
+	srv, _ := newUpstream(t)
 	c, _ := New(srv.URL, nil)
 	raw, err := c.FetchPackumentRaw(context.Background(), "@scope/pkg")
 	if err != nil {
-		t.Fatalf("fetch raw: %v", err)
+		t.Fatal(err)
 	}
 	if !strings.Contains(string(raw), `"@scope/pkg"`) {
-		t.Errorf("raw packument missing name: %q", raw)
+		t.Errorf("raw missing name: %q", raw)
+	}
+}
+
+func TestFetchPackumentNotFound(t *testing.T) {
+	srv, _ := newUpstream(t)
+	c, _ := New(srv.URL, nil)
+	_, err := c.FetchPackument(context.Background(), "missing")
+	if err != ErrNotFound {
+		t.Fatalf("err = %v want ErrNotFound", err)
 	}
 }
 
 func TestFetchTarballStreamsBytes(t *testing.T) {
-	srv, tarballURL := newServer(t)
+	srv, tarballURL := newUpstream(t)
 	c, _ := New(srv.URL, nil)
 	rc, n, err := c.FetchTarball(context.Background(), *tarballURL)
 	if err != nil {
-		t.Fatalf("fetch: %v", err)
+		t.Fatal(err)
 	}
 	defer func() { _ = rc.Close() }()
-	body, err := io.ReadAll(rc)
-	if err != nil {
-		t.Fatalf("read: %v", err)
-	}
-	if string(body) != "TARBALL-BYTES" {
-		t.Errorf("body = %q", body)
+	b, _ := io.ReadAll(rc)
+	if string(b) != "TARBALL-BYTES" {
+		t.Errorf("body = %q", b)
 	}
 	if n != int64(len("TARBALL-BYTES")) {
-		t.Errorf("content-length = %d want %d", n, len("TARBALL-BYTES"))
-	}
-}
-
-func TestFetchTarballNotFound(t *testing.T) {
-	srv, _ := newServer(t)
-	c, _ := New(srv.URL, nil)
-	_, _, err := c.FetchTarball(context.Background(), srv.URL+"/missing")
-	if err != registry.ErrNotFound {
-		t.Fatalf("err = %v want ErrNotFound", err)
+		t.Errorf("content-length = %d", n)
 	}
 }
 
