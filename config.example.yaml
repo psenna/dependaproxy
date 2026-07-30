@@ -35,19 +35,19 @@ registries:
           path: /var/lib/dependaproxy/cache/npm
       - type: upstream-registry
 
-  # Uncomment once the pipy adapter is registered (issue #38+):
-  # - type: pypi
-  #   prefix: /pypi
-  #   upstream: https://pypi.org/simple
-  #   validation:
-  #     - type: min-publication-age
-  #       params:
-  #         min_days: 7
-  #   retrieval:
-  #     - type: local-disk-cache
-  #       params:
-  #         path: /var/lib/dependaproxy/cache/pypi
-  #     - type: upstream-registry
+  # The pypi adapter is registered; enable it to also serve Python packages:
+  - type: pypi
+    prefix: /pypi
+    upstream: https://pypi.org/simple
+    validation:
+      - type: min-publication-age
+        params:
+          min_days: 7
+    retrieval:
+      - type: local-disk-cache
+        params:
+          path: /var/lib/dependaproxy/cache/pypi
+      - type: upstream-registry
 
   # Uncomment once the maven adapter is registered (issue #42+):
   # - type: maven

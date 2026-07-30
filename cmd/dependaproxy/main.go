@@ -15,7 +15,8 @@ import (
 	"time"
 
 	"github.com/psenna/dependaproxy/internal/config"
-	_ "github.com/psenna/dependaproxy/internal/registry/npm" // register the npm adapter
+	_ "github.com/psenna/dependaproxy/internal/registry/npm"  // register the npm adapter
+	_ "github.com/psenna/dependaproxy/internal/registry/pypi" // register the pypi adapter
 	"github.com/psenna/dependaproxy/internal/server"
 	"github.com/psenna/dependaproxy/internal/storage/db"
 )
