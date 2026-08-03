@@ -127,6 +127,12 @@ registries:
   #   validation: []
   #   retrieval: []
 
+  # The goproxy adapter serves the Go module proxy protocol (pass-through in
+  # v1; storage/trust flow lands in a later issue):
+  # - type: goproxy
+  #   prefix: /goproxy
+  #   upstream: https://proxy.golang.org
+
 # ---------------------------------------------------------------------------
 # Projects (per-project configuration + SBOM)
 # ---------------------------------------------------------------------------
