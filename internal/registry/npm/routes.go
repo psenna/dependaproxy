@@ -233,6 +233,8 @@ func (a *npmAdapter) fetchErr(w http.ResponseWriter, r *http.Request, err error)
 	switch {
 	case errors.Is(err, ErrNotFound):
 		a.fail(w, r, http.StatusNotFound, "package or version not found upstream")
+	case errors.Is(err, pipeline.ErrRejected):
+		a.fail(w, r, http.StatusForbidden, "retrieval rejected", err)
 	case errors.Is(err, pipeline.ErrNoResolver):
 		a.fail(w, r, http.StatusBadGateway, "no retrieval middleware resolved the package", err)
 	default:
@@ -254,7 +256,12 @@ func (a *npmAdapter) fail(w http.ResponseWriter, r *http.Request, code int, msg 
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(code)
-	_, _ = w.Write([]byte(msg + "\n"))
+	if len(errs) > 0 && errs[0] != nil {
+		// Surface the underlying reason (e.g. the CVE IDs on a retrieval-rejected
+		// deny) so clients see why the request failed, not just the short msg.
+		msg += ": " + errs[0].Error()
+	}
+	_, _ = w.Write([]byte(msg + "\n")) //nolint:gosec // G705: plain-text error detail, not HTML
 }
 
 // baseURL returns scheme://host + this adapter's prefix, for rewriting

@@ -11,6 +11,10 @@ import (
 // ErrNoResolver is returned when no retrieval middleware resolved the package.
 var ErrNoResolver = errors.New("pipeline: no retrieval middleware resolved the package")
 
+// ErrRejected is wrapped by a retrieval middleware that denies a request by
+// policy (e.g. a retrieval-stage CVE check). Adapters map it to 403.
+var ErrRejected = errors.New("pipeline: request rejected by retrieval middleware")
+
 // Evictor is implemented by cache retrieval middleware (localcache.Middleware).
 // Resolved.Cache may be nil when the retrieval chain has no cache head.
 type Evictor interface {
