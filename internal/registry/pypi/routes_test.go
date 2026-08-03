@@ -80,6 +80,140 @@ func (notFoundClientP) FetchFile(context.Context, string) (io.ReadCloser, int64,
 	return nil, 0, ErrNotFound
 }
 
+// --- project routing (issue #55) ---
+
+// captureClient records the project name and the project key carried on the
+// request context at fetch time, then serves canned upstream data.
+type captureClient struct {
+	project   *Project
+	raw       []byte
+	file      []byte
+	mu        sync.Mutex
+	rawPkg    string
+	rawKey    string
+	fileCalls int32
+}
+
+func (c *captureClient) FetchIndex(ctx context.Context, name string) (*Project, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.rawPkg = name
+	c.rawKey = pipeline.ProjectKeyFromContext(ctx)
+	return c.project, nil
+}
+func (c *captureClient) FetchIndexRaw(ctx context.Context, name, _ string) ([]byte, string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.rawPkg = name
+	c.rawKey = pipeline.ProjectKeyFromContext(ctx)
+	return c.raw, acceptJSON, nil
+}
+func (c *captureClient) FetchFile(context.Context, string) (io.ReadCloser, int64, error) {
+	atomic.AddInt32(&c.fileCalls, 1)
+	return io.NopCloser(bytes.NewReader(c.file)), int64(len(c.file)), nil
+}
+
+func (c *captureClient) lastIndex() (pkg, key string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.rawPkg, c.rawKey
+}
+
+// projKeyRecorder is a mutation middleware that captures the PipelineContext
+// ProjectKey (and PkgName) seen by PreFetch on a file flow.
+type projKeyRecorder struct {
+	mu  sync.Mutex
+	key string
+	pkg string
+}
+
+func (*projKeyRecorder) Name() string { return "project-key-recorder" }
+func (r *projKeyRecorder) PreFetch(ctx *pipeline.PipelineContext) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.key = ctx.ProjectKey
+	r.pkg = ctx.PkgName
+	return nil
+}
+func (*projKeyRecorder) PostFetch(*pipeline.PipelineContext) error { return nil }
+
+func (r *projKeyRecorder) captured() (key, pkg string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.key, r.pkg
+}
+
+func TestPypiProjectKeySetOnContext(t *testing.T) {
+	dir := t.TempDir()
+	proj, raw := buildPack(time.Now().AddDate(0, 0, -30), []byte("WHEEL"))
+	c := &captureClient{project: proj, raw: raw, file: []byte("WHEEL")}
+	a := newTestAdapter(t, "/pypi", dir, 0, c, newMemStore())
+	rec := &projKeyRecorder{}
+	a.mutation = pipeline.MutationPipeline{Chain: []pipeline.MutationMiddleware{rec}}
+	srv := newTestServer(t, a)
+
+	// Project-scoped simple index: "/p/myproj" stripped, index for "testpkg".
+	resp, err := http.Get(srv.URL + "/pypi/p/myproj/simple/testpkg/") //nolint:gosec // G107: proxy URL under test
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("index: code=%d want 200", resp.StatusCode)
+	}
+	pkg, key := c.lastIndex()
+	if pkg != "testpkg" {
+		t.Errorf("index fetched as %q, want %q (project prefix must be stripped)", pkg, "testpkg")
+	}
+	if key != "myproj" {
+		t.Errorf("project key on index request context = %q, want %q", key, "myproj")
+	}
+
+	// Project-scoped file: the mutation PreFetch must see ctx.ProjectKey.
+	resp, err = http.Get(srv.URL + "/pypi/p/myproj/files/testpkg/1.0.0/" + wheelFile) //nolint:gosec // G107: proxy URL under test
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != 200 || string(body) != "WHEEL" {
+		t.Fatalf("file: code=%d body=%q want 200/WHEEL", resp.StatusCode, body)
+	}
+	key, pkg = rec.captured()
+	if key != "myproj" {
+		t.Errorf("ctx.ProjectKey = %q, want %q", key, "myproj")
+	}
+	if pkg != "testpkg" {
+		t.Errorf("ctx.PkgName = %q, want %q", pkg, "testpkg")
+	}
+}
+
+func TestPypiDefaultPathUnchanged(t *testing.T) {
+	dir := t.TempDir()
+	proj, raw := buildPack(time.Now().AddDate(0, 0, -30), []byte("WHEEL"))
+	c := &captureClient{project: proj, raw: raw, file: []byte("WHEEL")}
+	a := newTestAdapter(t, "/pypi", dir, 0, c, newMemStore())
+	srv := newTestServer(t, a)
+
+	resp, err := http.Get(srv.URL + "/pypi/simple/testpkg/") //nolint:gosec // G107: proxy URL under test
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("code=%d want 200", resp.StatusCode)
+	}
+	pkg, key := c.lastIndex()
+	if pkg != "testpkg" {
+		t.Errorf("index fetched as %q, want %q", pkg, "testpkg")
+	}
+	if key != "" {
+		t.Errorf("project key on default path = %q, want \"\"", key)
+	}
+}
+
 func pyYamlNode(s string) yaml.Node {
 	var n yaml.Node
 	if err := yaml.Unmarshal([]byte(s), &n); err != nil {

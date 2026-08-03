@@ -27,6 +27,7 @@ type PipelineContext struct {
 	PkgName    string
 	Version    string
 	ArtifactID string // pypi: filename; maven: "classifier:type"; npm: "" (name+version suffices)
+	ProjectKey string // tenant/project key from a "/p/<key>/..." request path; "" on the default (non-project) path
 	Index      any    // registry-specific metadata document
 	Artifact   any    // registry-specific matched artifact ref
 	Tarball    *Tarball
@@ -39,6 +40,8 @@ func NewPipelineContext(ctx context.Context, log *slog.Logger, registryName, pkg
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	// ProjectKey starts as "" — the default (non-project) path. Adapters that
+	// support project routing set it from the request context after building.
 	return &PipelineContext{
 		Ctx:        ctx,
 		Log:        log,

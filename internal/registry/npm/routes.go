@@ -40,6 +40,11 @@ func (a *npmAdapter) Prefix() string { return a.prefix }
 func (a *npmAdapter) Handler() http.Handler { return http.HandlerFunc(a.serve) }
 
 func (a *npmAdapter) serve(w http.ResponseWriter, r *http.Request) {
+	remaining, key := pipeline.ParseProjectPath(r.URL.Path)
+	if key != "" {
+		r = r.WithContext(pipeline.ContextWithProjectKey(r.Context(), key))
+		r.URL.Path = remaining
+	}
 	if r.Method != http.MethodGet {
 		a.fail(w, r, http.StatusMethodNotAllowed, "method not allowed")
 		return
@@ -86,6 +91,7 @@ func (a *npmAdapter) handleTarball(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := pipeline.NewPipelineContext(r.Context(), a.logger, "npm", pkg, version, "")
+	ctx.ProjectKey = pipeline.ProjectKeyFromContext(r.Context())
 	if err := a.mutation.RunPreFetch(ctx); err != nil {
 		a.fail(w, r, http.StatusInternalServerError, "mutation prefetch", err)
 		return
