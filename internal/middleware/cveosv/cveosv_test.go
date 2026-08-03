@@ -39,6 +39,9 @@ func TestEcosystem(t *testing.T) {
 			t.Errorf("Ecosystem(%q) = %q,%v want %q,true", reg, eco, ok, reg)
 		}
 	}
+	if eco, ok := Ecosystem("goproxy"); !ok || eco != "Go" {
+		t.Errorf("Ecosystem(\"goproxy\") = %q,%v want \"Go\",true", eco, ok)
+	}
 	for _, reg := range []string{"maven", "cargo", ""} {
 		if eco, ok := Ecosystem(reg); ok || eco != "" {
 			t.Errorf("Ecosystem(%q) = %q,%v want \"\",false", reg, eco, ok)

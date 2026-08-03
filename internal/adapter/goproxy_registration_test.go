@@ -12,7 +12,18 @@ import (
 	"github.com/psenna/dependaproxy/internal/config"
 	"github.com/psenna/dependaproxy/internal/registry/goproxy"
 	"github.com/psenna/dependaproxy/internal/storage/db"
+	"gopkg.in/yaml.v3"
 )
+
+// yamlNode decodes a YAML string into the yaml.Node a config.Middleware.Params
+// carries, the same shape the factories receive from config.Load.
+func yamlNode(s string) yaml.Node {
+	var n yaml.Node
+	if err := yaml.Unmarshal([]byte(s), &n); err != nil {
+		panic(err)
+	}
+	return n
+}
 
 // This is an external test package (adapter_test) on purpose: an internal test
 // file in package adapter importing the goproxy package — which imports adapter
@@ -49,6 +60,27 @@ func TestGoproxyFactoryBuilds(t *testing.T) {
 	}
 	if a.Prefix() != "/goproxy" {
 		t.Errorf("prefix = %q", a.Prefix())
+	}
+}
+
+// TestGoproxyFactoryBuildsWithChains proves the Factory accepts the wired
+// validation + cache-retrieval chain shape from config.example.yaml.
+func TestGoproxyFactoryBuildsWithChains(t *testing.T) {
+	_, err := goproxy.Factory(config.RegistryConfig{
+		Type:     "goproxy",
+		Prefix:   "/goproxy",
+		Upstream: "http://example.com",
+		Validation: []config.Middleware{
+			{Type: "min-publication-age", Params: yamlNode("min_days: 7")},
+			{Type: "cve-check", Params: yamlNode("mode: deny\non_error: fail_open")},
+		},
+		Retrieval: []config.Middleware{
+			{Type: "local-disk-cache", Params: yamlNode("path: " + t.TempDir())},
+			{Type: "upstream-registry"},
+		},
+	}, goproxyDeps(t))
+	if err != nil {
+		t.Fatalf("Factory: %v", err)
 	}
 }
 

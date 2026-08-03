@@ -6,6 +6,11 @@ import (
 	"github.com/psenna/dependaproxy/internal/adapter"
 	"github.com/psenna/dependaproxy/internal/config"
 	"github.com/psenna/dependaproxy/internal/middleware/mutation"
+	"github.com/psenna/dependaproxy/internal/middleware/retrieval/cverecheck"
+	"github.com/psenna/dependaproxy/internal/middleware/retrieval/localcache"
+	"github.com/psenna/dependaproxy/internal/middleware/retrieval/s3cache"
+	"github.com/psenna/dependaproxy/internal/middleware/validation/cve"
+	"github.com/psenna/dependaproxy/internal/middleware/validation/malware"
 	"github.com/psenna/dependaproxy/internal/pipeline"
 	"github.com/psenna/dependaproxy/internal/project"
 )
@@ -13,10 +18,12 @@ import (
 func init() { adapter.Register("goproxy", Factory) }
 
 // Factory builds the goproxy adapter from its RegistryConfig + shared Deps.
-// v1 ships an EMPTY validation chain (validation middlewares land in #75) and
-// the terminal upstream-registry retrieval only (no local/s3 cache — #75). The
-// mutation chain defaults to a single NoOp so the PreFetch/PostFetch hook path
-// is exercised; real mutations slot in via config.
+// The validation chain supports min-publication-age, cve-check (mapped to OSV's
+// "Go" ecosystem) and malware-scan; the retrieval chain supports
+// cve-check-retrieval, the local-disk/s3 caches and the terminal
+// upstream-registry (which stashes the *Info in ctx.Index for
+// min-publication-age). The mutation chain defaults to a single NoOp so the
+// PreFetch/PostFetch hook path is exercised; real mutations slot in via config.
 func Factory(cfg config.RegistryConfig, deps adapter.Deps) (adapter.Adapter, error) {
 	client, err := New(cfg.Upstream, nil)
 	if err != nil {
@@ -28,6 +35,12 @@ func Factory(cfg config.RegistryConfig, deps adapter.Deps) (adapter.Adapter, err
 	}
 
 	reg := pipeline.NewRegistry()
+	reg.RegisterValidation("min-publication-age", MinPubFactory)
+	reg.RegisterValidation("cve-check", cve.Factory)
+	reg.RegisterValidation("malware-scan", malware.Factory)
+	reg.RegisterRetrieval("cve-check-retrieval", cverecheck.Factory)
+	reg.RegisterRetrieval("local-disk-cache", localcache.Factory)
+	reg.RegisterRetrieval("s3-cache", s3cache.Factory)
 	reg.RegisterRetrieval("upstream-registry", UpstreamFactory(client))
 	reg.RegisterMutation("noop", mutation.Factory)
 
