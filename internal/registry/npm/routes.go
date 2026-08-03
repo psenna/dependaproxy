@@ -126,6 +126,9 @@ func (a *npmAdapter) serveTrusted(w http.ResponseWriter, r *http.Request, ctx *p
 		a.fail(w, r, http.StatusInternalServerError, "mutation postfetch", err)
 		return
 	}
+	if ctx.Tarball != nil && ctx.Tarball.Bytes != nil {
+		body = ctx.Tarball.Bytes
+	}
 	a.trackDownload(ctx, rec.ValidationHash)
 	a.writeTarball(w, body)
 }
@@ -159,6 +162,9 @@ func (a *npmAdapter) serveUntrusted(w http.ResponseWriter, r *http.Request, ctx 
 	if err := rp.Mutation.RunPostFetch(ctx); err != nil {
 		a.fail(w, r, http.StatusInternalServerError, "mutation postfetch", err)
 		return
+	}
+	if ctx.Tarball != nil && ctx.Tarball.Bytes != nil {
+		body = ctx.Tarball.Bytes
 	}
 	a.trackDownload(ctx, h)
 	a.writeTarball(w, body)

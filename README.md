@@ -120,6 +120,22 @@ registries:
 > interface (identical keying/hash-verify/eviction); `local-disk-cache` and
 > `s3-cache` differ only in storage.
 
+### Mutation middlewares
+
+- `strip-install-scripts` (npm only) — strips `preinstall`/`install`/`postinstall`
+  from `package/package.json` scripts (other scripts preserved), repacks the
+  tarball deterministically. Best-effort: a tarball with no package.json or an
+  invalid archive is served unchanged.
+
+Mutations are **non-persistent view transforms** re-applied on every serve
+(trusted + untrusted): the stored sha256 remains the *upstream* hash; the
+mutation rewrites the bytes served to the client **after** verification.
+Re-tarring on every serve adds CPU; a follow-up will cache mutated bytes.
+
+Validation (incl. malware-scan) runs on the **original upstream bytes before
+PostFetch**; the mutator runs after — detect (malware-scan) and remediate
+(strip-install-scripts) are complementary.
+
 ## Projects (per-project configuration + SBOM)
 
 DependaProxy applies **one global middleware config per registry** by default. A
@@ -308,7 +324,7 @@ tests. The build is CGo-free except the race detector.
 - ☑ Malware / heuristic static-analysis validation (npm install scripts + suspicious script contents; pypi setup.py/PKG-INFO patterns + wheel exec files; deny/warn)
 - ☑ Pluggable cache backend (CacheBackend interface: disk + S3/MinIO write-through with real-MinIO integration tests)
 - ☑ Local Disk Cache (write-through, generic per-artifact keying, per-key lock)
-- ☑ Mutation pipeline PreFetch/PostFetch hooks (NoOp shipped; real mutations via config)
+- ☑ Mutation pipeline PreFetch/PostFetch hooks (NoOp shipped; strip-install-scripts for npm shipped)
 - ☑ Static bearer-token auth (shared across registries, /healthz exempt, constant-time)
 - ☑ YAML config (multi-registry: per-registry upstream/middleware; shared storage/auth/log)
 - ☑ Middleware plugin architecture (new middleware = one file + one config entry)
@@ -329,7 +345,7 @@ tests. The build is CGo-free except the race detector.
 - ☐ Metrics & observability (Prometheus, tracing, audit log)
 - ☐ Package provenance verification (npm sigstore, PEP 740, Maven PGP)
 - ☐ Yanked-file filtering middleware
-- ☐ Mutations: strip install scripts / files from wheels, sdists, jars
+- ☐ Mutations: strip files from pypi wheels/sdists + jars (npm install-scripts shipped); cache mutated bytes (keyed by upstream sha256 + mutator version)
 - ☐ Rate limiting & quota
 - ☐ Web UI / admin dashboard
 - ☐ Multi-algorithm trust anchor (sha256 + blake2b/sha512)

@@ -46,6 +46,15 @@ registries:
         params:
           path: /var/lib/dependaproxy/cache/npm
       - type: upstream-registry
+    # Mutations are non-persistent view transforms re-applied on every serve
+    # (trusted and untrusted). The stored sha256 remains the UPSTREAM hash;
+    # the mutation rewrites the bytes served to the client AFTER verification.
+    # Re-tarring on every serve adds CPU (follow-up: cache mutated bytes).
+    # mutation:
+    #   - type: strip-install-scripts   # npm only
+    #     # Strips preinstall/install/postinstall from package.json scripts
+    #     # (other scripts preserved). Best-effort: a tarball with no
+    #     # package.json or an invalid archive is served unchanged.
 
   # The pypi adapter is registered; enable it to also serve Python packages:
   - type: pypi
