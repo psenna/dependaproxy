@@ -1,0 +1,35 @@
+# DependaProxy docs site — built by GitHub's default Jekyll (no workflow).
+# Pages source: Settings → Pages → "Deploy from a branch" → main → /docs
+title: DependaProxy
+description: >-
+  A secure, multi-registry dependency proxy. Validates each package through a
+  configurable middleware pipeline, stores a sha256 trust anchor, and serves only
+  bytes that match the stored hash — with CVE, malware, and provenance gates,
+  per-project configuration, and a per-project SBOM.
+baseurl: "/dependaproxy"
+url: "https://psenna.github.io"
+
+# GitHub-Pages-supported theme (clean sidebar). Swap to cayman/slate/etc. freely.
+theme: jekyll-theme-minimal
+
+markdown: kramdown
+kramdown:
+  syntax_highlighter: rouge
+  input: GFM
+
+# Repo links used by the "Edit on GitHub" / source references.
+github_repo: "https://github.com/psenna/dependaproxy"
+github_branch: main
+
+defaults:
+  - scope:
+      path: "" # all files in docs/
+    values:
+      layout: page
+
+# Exclude noise that the repo root might leak if the source is ever moved; the
+# /docs source keeps this tight already.
+exclude:
+  - Gemfile
+  - Gemfile.lock
+  - node_modules
