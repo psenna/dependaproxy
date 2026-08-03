@@ -74,3 +74,49 @@ registries:
   #   upstream: https://repo1.maven.org/maven2
   #   validation: []
   #   retrieval: []
+
+# ---------------------------------------------------------------------------
+# Projects (per-project configuration + SBOM)
+# ---------------------------------------------------------------------------
+# Projects are NOT defined in this static file — they are managed at runtime
+# through the authenticated admin REST API at /admin (gated by the same
+# `auth.token` above; a dedicated admin token is a future hardening). See
+# README "Projects" for the full route list.
+#
+# A project lets a consuming codebase override the GLOBAL per-registry
+# middleware config above by passing a project key in the URL:
+#   default:        http://dependaproxy:8080/npm/<pkg>
+#   project-scoped: http://dependaproxy:8080/npm/p/<key>/<pkg>
+# (same for pypi: /pypi/p/<key>/simple/<pkg>/). No key, or an unknown key,
+# falls back to the global config above — zero overhead on the default path.
+#
+# The admin API stores each project's config as YAML in the `projects.config`
+# column. The shape mirrors the per-registry middleware lists above (minus the
+# fixed type/prefix/upstream), keyed by registry type. Example (what a
+# `POST /admin/projects` body with a JSON `registries` map becomes):
+#
+#   npm:
+#     validation:
+#       - type: cve-check
+#         params:
+#           mode: warn        # override the global `deny` for this project
+#     # retrieval/mutation omitted -> reuse the global chains (per-chain fallback)
+#   pypi:
+#     validation:
+#       - type: cve-check
+#         params:
+#           mode: warn
+#
+# Per-chain fallback: a chain (validation/retrieval/mutation) present in the
+# project config is rebuilt; a chain omitted reuses the global one. After a
+# PUT/DELETE the resolver cache for that key is dropped, so the next
+# /npm/p/<key>/... request rebuilds from the updated config.
+#
+# Each project-scoped download is recorded in `project_dependencies` (an async,
+# buffered flush) and exposed as an SBOM via
+#   GET /admin/projects/<key>/dependencies?registry=&pkg=
+#
+# Create a project:
+#   curl -X POST http://dependaproxy:8080/admin/projects \
+#     -H "Authorization: Bearer $DEPENDAPROXY_TOKEN" -H 'Content-Type: application/json' \
+#     -d '{"key":"acme","registries":{"npm":{"validation":[{"type":"cve-check","params":{"mode":"warn"}}]}}}'
