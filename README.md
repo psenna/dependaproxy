@@ -102,12 +102,42 @@ registries:
   eval/child_process/external URLs); pypi sdist `setup.py`/`setup.cfg`/`PKG-INFO`
   patterns (exec/eval/base64/os.system/subprocess/socket/curl/wget) and wheels
   with `setup.py` or executable files. Params: `mode: deny|warn` (default `deny`).
+- `provenance-verify` — verifies the upstream registry's package provenance:
+  **npm sigstore** attestations advertised in the packument
+  (`dist.attestations.url` — the SLSA provenance bundle minted by the GitHub
+  Actions publishing workflow) and **pypi PEP 740** attestation bundles served
+  at the simple-API `/<project>/<version>/attestations/` endpoint. Params:
+  `mode: deny|warn` (default `deny` → 403), `require_provenance: false|true`
+  (default `false` — pass when no attestation is published; `true` → deny/warn),
+  `on_error: fail_open|fail_closed` (default `fail_open` — a provenance-source
+  outage serves; `fail_closed` rejects), `identity` (regex matched against the
+  signing certificate SAN), `trust_root_dir` (sigstore TUF cache dir; default
+  `$HOME/.sigstore/root`), `timeout` (default 15s). Behavior: at least one
+  bundle that verifies → pass; every bundle invalid/tampered → deny (or warn +
+  `provenance: {status: invalid}` metadata); no attestation published → pass
+  (or deny/warn when `require_provenance`); provenance infrastructure failure
+  (registry unreachable, TUF trust-root unavailable) → `on_error`.
+
+> **Trust root & identity policy.** Verification uses the **sigstore
+> public-good trust root** (Fulcio certificate authorities + Rekor CT/tlog),
+> resolved through sigstore-go's TUF client (cached on disk; network required
+> on first use — an unavailable trust root degrades to `on_error`, i.e. serves
+> under the default `fail_open`). The `identity` param pins the signing
+> certificate SAN against a regex (exact values are valid regexes). With
+> `identity` unset the signature and CT/tlog inclusion are still verified
+> against the trust root, but the signing identity is **not** pinned — weaker;
+> set `identity` in production (e.g. your GitHub org's workflow identity).
+> In v1 the in-toto statement's artifact subjects are not cross-checked against
+> the served bytes.
 
 > **Validation runs once per artifact.** A package is validated on first fetch
 > and stored with its sha256 trust anchor; later retrievals serve the stored
 > bytes without re-validating. The `cve-check-retrieval` middleware (below)
 > closes the resulting gap: a CVE published *after* first validation is caught
 > on the next serve even though the stored artifact is not re-validated.
+> `provenance-verify` is the same model — it runs on the untrusted path only;
+> an ongoing provenance re-check of stored packages would follow the
+> `cve-check-retrieval` pattern (out of scope).
 
 ### Retrieval middlewares
 
@@ -331,7 +361,8 @@ tests. The build is CGo-free except the race detector.
   caught at hash-verify, evicted, refetched, and re-verified.
 - **Shared static bearer token**, compared in constant time, never logged.
 - **Minimal dependencies**: `gopkg.in/yaml.v3` + `github.com/jackc/pgx/v5` +
-  `github.com/minio/minio-go/v7` (S3 cache backend only).
+  `github.com/minio/minio-go/v7` (S3 cache backend only) +
+  `github.com/sigstore/sigstore-go` (provenance verification only).
 
 ## Feature roadmap
 
@@ -348,6 +379,7 @@ tests. The build is CGo-free except the race detector.
 - ☑ Pluggable cache backend (CacheBackend interface: disk + S3/MinIO write-through with real-MinIO integration tests)
 - ☑ Local Disk Cache (write-through, generic per-artifact keying, per-key lock)
 - ☑ Mutation pipeline PreFetch/PostFetch hooks (NoOp shipped; strip-install-scripts for npm shipped)
+- ☑ Package provenance verification (`provenance-verify`: npm sigstore via packument `dist.attestations.url` + pypi PEP 740 attestations; real sigstore-go verifier against the public-good trust root via TUF; deny/warn, require_provenance, on_error; Verifier-interface abstraction for fake-bundle tests)
 - ☑ Static bearer-token auth (shared across registries, /healthz exempt, constant-time)
 - ☑ YAML config (multi-registry: per-registry upstream/middleware; shared storage/auth/log)
 - ☑ Middleware plugin architecture (new middleware = one file + one config entry)
@@ -366,7 +398,7 @@ tests. The build is CGo-free except the race detector.
 - ☐ Policy engine (allow/deny lists, license, dependency constraints)
 - ☐ Auth / RBAC (token scopes, per-registry/per-package permissions)
 - ☐ Metrics & observability (Prometheus, tracing, audit log)
-- ☐ Package provenance verification (npm sigstore, PEP 740, Maven PGP)
+- ☐ Package provenance: Maven PGP signatures (npm sigstore + pypi PEP 740 shipped)
 - ☐ Yanked-file filtering middleware
 - ☐ Mutations: strip files from pypi wheels/sdists + jars (npm install-scripts shipped); cache mutated bytes (keyed by upstream sha256 + mutator version)
 - ☐ Rate limiting & quota

@@ -81,6 +81,24 @@ func (c *Client) FetchPackumentRaw(ctx context.Context, name string) ([]byte, er
 	return b, nil
 }
 
+// FetchBytes GETs an arbitrary URL (e.g. a dist.attestations.url provenance
+// bundle) and returns the body verbatim. 404 -> ErrNotFound.
+func (c *Client) FetchBytes(ctx context.Context, target string) ([]byte, error) {
+	if _, err := url.Parse(target); err != nil {
+		return nil, fmt.Errorf("npm: invalid url: %w", err)
+	}
+	resp, err := c.do(ctx, target)
+	if err != nil {
+		return nil, err
+	}
+	defer closeQuiet(resp.Body)
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("npm: read %s: %w", target, err)
+	}
+	return b, nil
+}
+
 // FetchTarball streams the tarball at tarballURL. The caller owns the body.
 func (c *Client) FetchTarball(ctx context.Context, tarballURL string) (io.ReadCloser, int64, error) {
 	if _, err := url.Parse(tarballURL); err != nil {

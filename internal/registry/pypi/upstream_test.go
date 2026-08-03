@@ -30,6 +30,9 @@ func (f *pFakeClient) FetchIndex(_ context.Context, _ string) (*Project, error) 
 func (f *pFakeClient) FetchIndexRaw(_ context.Context, _ string, _ string) ([]byte, string, error) {
 	return f.raw, acceptJSON, nil
 }
+func (f *pFakeClient) FetchAttestations(_ context.Context, _, _ string) ([]byte, error) {
+	return nil, ErrNotFound
+}
 func (f *pFakeClient) FetchFile(_ context.Context, _ string) (io.ReadCloser, int64, error) {
 	f.fileCalls++
 	if f.fileErr != nil {

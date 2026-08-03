@@ -52,11 +52,12 @@ func (m *memStore) Put(_ context.Context, r Record) error {
 
 // rawClient serves a trimmed Project, raw PEP 691 JSON, and file bytes.
 type rawClient struct {
-	project    *Project
-	raw        []byte
-	file       []byte
-	indexCalls int32
-	fileCalls  int32
+	project      *Project
+	raw          []byte
+	file         []byte
+	attestations []byte // PEP 740 attestation body served by FetchAttestations
+	indexCalls   int32
+	fileCalls    int32
 }
 
 func (c *rawClient) FetchIndex(_ context.Context, _ string) (*Project, error) {
@@ -70,6 +71,9 @@ func (c *rawClient) FetchFile(_ context.Context, _ string) (io.ReadCloser, int64
 	atomic.AddInt32(&c.fileCalls, 1)
 	return io.NopCloser(bytes.NewReader(c.file)), int64(len(c.file)), nil
 }
+func (c *rawClient) FetchAttestations(_ context.Context, _, _ string) ([]byte, error) {
+	return c.attestations, nil
+}
 
 type notFoundClientP struct{}
 
@@ -79,6 +83,9 @@ func (notFoundClientP) FetchIndexRaw(context.Context, string, string) ([]byte, s
 }
 func (notFoundClientP) FetchFile(context.Context, string) (io.ReadCloser, int64, error) {
 	return nil, 0, ErrNotFound
+}
+func (notFoundClientP) FetchAttestations(context.Context, string, string) ([]byte, error) {
+	return nil, ErrNotFound
 }
 
 // --- project routing (issue #55) ---
@@ -112,6 +119,9 @@ func (c *captureClient) FetchIndexRaw(ctx context.Context, name, _ string) ([]by
 func (c *captureClient) FetchFile(context.Context, string) (io.ReadCloser, int64, error) {
 	atomic.AddInt32(&c.fileCalls, 1)
 	return io.NopCloser(bytes.NewReader(c.file)), int64(len(c.file)), nil
+}
+func (c *captureClient) FetchAttestations(context.Context, string, string) ([]byte, error) {
+	return nil, ErrNotFound
 }
 
 func (c *captureClient) lastIndex() (pkg, key string) {

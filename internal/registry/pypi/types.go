@@ -25,6 +25,10 @@ type RegistryClient interface {
 	FetchIndexRaw(ctx context.Context, name, accept string) ([]byte, string, error)
 	// FetchFile streams the artifact at fileURL. contentLength is -1 if unknown.
 	FetchFile(ctx context.Context, fileURL string) (io.ReadCloser, int64, error)
+	// FetchAttestations fetches the PEP 740 attestation document for a project
+	// version (GET <base>/<name>/<version>/attestations/). 404 maps to
+	// ErrNotFound (no attestations published).
+	FetchAttestations(ctx context.Context, name, version string) ([]byte, error)
 }
 
 // Project is the trimmed PEP 691 simple-index model for one project.

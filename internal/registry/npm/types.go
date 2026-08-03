@@ -18,6 +18,9 @@ type RegistryClient interface {
 	FetchPackument(ctx context.Context, name string) (*Packument, error)
 	FetchPackumentRaw(ctx context.Context, name string) ([]byte, error)
 	FetchTarball(ctx context.Context, tarballURL string) (io.ReadCloser, int64, error)
+	// FetchBytes GETs an arbitrary URL (e.g. a dist.attestations.url provenance
+	// bundle) and returns the body verbatim. 404 maps to ErrNotFound.
+	FetchBytes(ctx context.Context, url string) ([]byte, error)
 }
 
 // Packument is the npm registry package metadata document (trimmed to the
@@ -37,6 +40,15 @@ type Version struct {
 
 // Dist is the download location + upstream integrity for a version.
 type Dist struct {
-	Tarball   string `json:"tarball"`
-	Integrity string `json:"integrity"`
+	Tarball      string        `json:"tarball"`
+	Integrity    string        `json:"integrity"`
+	Attestations *Attestations `json:"attestations,omitempty"`
+}
+
+// Attestations is the npm packument dist.attestations object: a URL from which
+// the sigstore provenance bundle(s) for the version can be fetched (the inline
+// `provenance` field is not modeled — the URL is the fetch path we use).
+type Attestations struct {
+	URL             string `json:"url"`
+	ProxiedSigstore string `json:"proxiedSigstoreUrl,omitempty"`
 }

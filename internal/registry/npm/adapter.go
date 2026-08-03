@@ -12,6 +12,7 @@ import (
 	"github.com/psenna/dependaproxy/internal/middleware/retrieval/s3cache"
 	"github.com/psenna/dependaproxy/internal/middleware/validation/cve"
 	"github.com/psenna/dependaproxy/internal/middleware/validation/malware"
+	"github.com/psenna/dependaproxy/internal/middleware/validation/provenance"
 	"github.com/psenna/dependaproxy/internal/pipeline"
 	"github.com/psenna/dependaproxy/internal/project"
 )
@@ -33,6 +34,7 @@ func Factory(cfg config.RegistryConfig, deps adapter.Deps) (adapter.Adapter, err
 	reg.RegisterValidation("min-publication-age", MinPubFactory)
 	reg.RegisterValidation("cve-check", cve.Factory)
 	reg.RegisterValidation("malware-scan", malware.Factory)
+	reg.RegisterValidation("provenance-verify", provenance.Factory(NewProvenanceSource(client)))
 	reg.RegisterRetrieval("cve-check-retrieval", cverecheck.Factory)
 	reg.RegisterRetrieval("local-disk-cache", localcache.Factory)
 	reg.RegisterRetrieval("s3-cache", s3cache.Factory)
