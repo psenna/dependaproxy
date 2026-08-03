@@ -86,15 +86,16 @@ stop-db:
 
 # Stand up a MinIO server for the S3-cache integration tests. The tests read
 # DP_TEST_MINIO_ENDPOINT / DP_TEST_MINIO_ACCESS_KEY / DP_TEST_MINIO_SECRET_KEY
-# and skip when the endpoint is unset — point them at this server, e.g.
+# and skip when the endpoint is unset — point them at this server (the root
+# credentials are the MINIO_ROOT_USER / MINIO_ROOT_PASSWORD below):
 #   make minio
 #   DP_TEST_MINIO_ENDPOINT=<minio-ip>:9000 DP_TEST_MINIO_ACCESS_KEY=dependaproxy \
-#     DP_TEST_MINIO_SECRET_KEY=dependaproxy-secret go test ./...
+#     DP_TEST_MINIO_SECRET_KEY=changeme go test ./...
 minio:
 	$(DOCKER) rm -f dependaproxy-minio 2>/dev/null || true
 	$(DOCKER) run -d --name dependaproxy-minio \
 		-e MINIO_ROOT_USER=dependaproxy \
-		-e MINIO_ROOT_PASSWORD=dependaproxy-secret \
+		-e MINIO_ROOT_PASSWORD=changeme \
 		-p 9000:9000 $(MINIO_IMAGE) server /data --console-address ":9001"
 
 stop-minio:
