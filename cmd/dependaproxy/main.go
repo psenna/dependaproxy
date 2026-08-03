@@ -47,7 +47,10 @@ func main() {
 		logger.Error("build server", "err", err)
 		os.Exit(1)
 	}
-	defer func() { _ = srv.Close() }()
+	// Shutdown drains the dependency tracker and closes the DB on every exit path
+	// (the explicit drain below handles the normal/error serve return; this covers
+	// early returns between here and the listener).
+	defer func() { _ = srv.Shutdown(context.Background()) }()
 
 	httpSrv := &http.Server{
 		Addr:              cfg.Server.Addr,
@@ -63,8 +66,19 @@ func main() {
 	}()
 
 	logger.Info("dependaproxy starting", "addr", cfg.Server.Addr, "registries", len(cfg.Registries))
-	if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		logger.Error("serve", "err", err)
+	serveErr := httpSrv.ListenAndServe()
+	if serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
+		logger.Error("serve", "err", serveErr)
+	}
+	// The http server has returned (graceful shutdown on ctx.Done, or an error),
+	// so no new requests can enqueue; drain buffered dependency records (bounded
+	// by a 10s context) before the DB closes.
+	drainCtx, dCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	if err := srv.Shutdown(drainCtx); err != nil {
+		logger.Warn("drain dependency tracker", "err", err)
+	}
+	dCancel()
+	if serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
 		os.Exit(1)
 	}
 }

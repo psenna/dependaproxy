@@ -64,6 +64,7 @@ func Factory(cfg config.RegistryConfig, deps adapter.Deps) (adapter.Adapter, err
 		storage:  storage,
 		client:   client,
 		resolver: resolver,
+		tracker:  deps.DependencyTracker,
 		logger:   deps.Logger,
 		now:      deps.Now,
 	}, nil
