@@ -120,6 +120,130 @@ registries:
 > interface (identical keying/hash-verify/eviction); `local-disk-cache` and
 > `s3-cache` differ only in storage.
 
+## Projects (per-project configuration + SBOM)
+
+DependaProxy applies **one global middleware config per registry** by default. A
+*project* is an opt-in, SonarQube-style override: a consuming codebase passes a
+**project key** in the URL and gets that project's middleware config (e.g. a
+project can run `cve-check` in `warn` while the global default is `deny`), and
+DependaProxy records every package@version the project downloads as a
+per-project **SBOM**. No project key → today's global default, unchanged.
+
+### Project-scoped routing (`/p/<key>`)
+
+The default registry URL is unchanged (`/npm`, `/pypi`). A project-scoped request
+inserts `p/<key>/` right after the registry prefix:
+
+| Default | Project-scoped |
+|---|---|
+| `/npm/<pkg>` | `/npm/p/<key>/<pkg>` |
+| `/npm/<pkg>/-/<version>.tgz` | `/npm/p/<key>/<pkg>/-/<version>.tgz` |
+| `/pypi/simple/<pkg>/` | `/pypi/p/<key>/simple/<pkg>/` |
+| `/pypi/files/<pkg>/<ver>/<file>` | `/pypi/p/<key>/files/<pkg>/<ver>/<file>` |
+
+Collision safety is built into the parser:
+
+- `/npm/p/-/lodash-1.0.0.tgz` is still the **package `p`** tarball (a key of `-`
+  is rejected), so the existing `p` package keeps working.
+- Scoped packages start with `@` (`/@scope/pkg`) → never collide with `p/`.
+- A valid project key matches `^[a-zA-Z0-9._-]+$` and is not `-`.
+
+**Default path is byte-identical to today**: `ProjectKey == ""` short-circuits
+before any allocation — no DB lookup, no dependency tracking, no overhead for
+existing clients. The global pipelines are pre-cached at startup, so resolving
+the default path is a pure in-memory lookup.
+
+### Per-project pipeline resolution
+
+Each adapter holds a `ProjectResolver` that builds and caches middleware
+pipelines per project key (reusing the adapter's middleware factories). On a
+project-scoped request it resolves the project's config from the `projects`
+table and builds the validation/retrieval/mutation chains; on the default path
+(or an **unknown** project key, which falls back to global) it returns the
+pre-cached global pipelines. Per-chain fallback: a project config that sets
+only `npm.validation` reuses the global retrieval/mutation chains. The resolver
+cache is invalidated on every admin PUT/DELETE so the next request re-reads the
+store.
+
+### Admin REST API (`/admin`)
+
+Projects are managed at runtime through an authenticated REST API mounted at
+`/admin`, gated by the **same shared `auth.token`** as the registries (a
+dedicated admin token is a future hardening). Routes:
+
+| Method & path | Purpose |
+|---|---|
+| `POST /admin/projects` | Create a project (409 if the key exists). |
+| `GET /admin/projects` | List projects. |
+| `GET /admin/projects/{key}` | Get one project's config (404 if missing). |
+| `PUT /admin/projects/{key}` | Upsert — create (201) or replace (200) a project's config. |
+| `DELETE /admin/projects/{key}` | Delete a project (404 if missing, 204 if present). |
+| `GET /admin/projects/{key}/dependencies` | The project's SBOM, with optional `?registry=&pkg=` server-side filters (404 if no records). |
+
+The request/response bodies are JSON; the per-registry middleware `params` are
+accepted as a JSON object and bridged to the YAML `params` the existing factory
+decode path consumes. After a `PUT` or `DELETE`, the resolver cache for that key
+is dropped across every adapter, so the next `/npm/p/<key>/…` request rebuilds
+from the updated config (after `DELETE`, the key falls back to the global
+default).
+
+### Dependency tracking (the SBOM)
+
+On each successful serve **with `ProjectKey != ""`**, the npm/pypi handlers
+enqueue `{projectKey, registry, pkg, version, artifactID, sha256}` to an
+in-process **async/buffered tracker** that batch-flushes to the
+`project_dependencies` table every few seconds (or on shutdown drain). Default
+downloads (`ProjectKey == ""`) are **not** tracked. Records are durable after a
+flush; a crash loses only the in-flight buffer. There is no per-request DB
+round-trip on the serve path. `GET /admin/projects/{key}/dependencies` reads the
+SBOM (the small async-flush window means a freshly-installed package may take a
+few seconds to appear).
+
+> **Validation runs once per artifact — still applies per project config.** A
+> package is validated on first fetch and stored with its sha256 trust anchor;
+> later retrievals serve the stored bytes without re-validating. So changing a
+> project's validation config does **not** re-validate an artifact already
+> stored under that name+version — only freshly-fetched packages hit the new
+> pipeline. (The admin e2e test uses a distinct package name per step for this
+> reason.)
+
+> **Known limitation.** Packument/index URL rewriting does not yet embed
+> `/p/<key>/`: a project-scoped packument returns `dist.tarball`/file URLs
+> pointing at the **default** path, so an automated install that follows the
+> rewritten URL loses the project scope (and is served/tracked under the global
+> default). That includes `npm install --registry …/npm/p/<key>`: npm fetches
+> the packument project-scoped but then downloads the tarball from the rewritten
+> `dist.tarball` URL (default path), so the tarball is served under the global
+> config and **not** recorded in the project's SBOM. To exercise the project
+> pipeline and record an SBOM entry today, request the project-scoped tarball URL
+> directly (e.g. `curl http://…/npm/p/<key>/<pkg>/-/<version>.tgz`); preserving
+> the prefix through the rewritten URLs — so a plain `npm install --registry
+> …/npm/p/<key>` populates the SBOM end-to-end — is a planned follow-up.
+
+### Getting started with projects
+
+```sh
+# 1. Create a project "acme" whose npm cve-check warns (global default is deny):
+curl -fsS -X POST http://localhost:8080/admin/projects \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"key":"acme","registries":{"npm":{"validation":[{"type":"cve-check","params":{"mode":"warn"}}]}}}'
+
+# 2. Install a package through the project pipeline. Request the project-scoped
+#    tarball URL directly so the download is validated under acme's config and
+#    recorded in acme's SBOM:
+curl -fsS http://localhost:8080/npm/p/acme/<pkg>/-/<version>.tgz \
+  -H "Authorization: Bearer $TOKEN" -o <pkg>-<version>.tgz
+#    (Setting `npm install --registry http://localhost:8080/npm/p/acme` fetches
+#    the packument project-scoped, but until the URL-rewrite follow-up lands npm
+#    follows the rewritten dist.tarball URL back to the default path, so the
+#    tarball is served/tracked under the global default — see the known
+#    limitation above.)
+
+# 3. Read the project's SBOM (may take a few seconds for the async flush):
+curl -fsS http://localhost:8080/admin/projects/acme/dependencies \
+  -H "Authorization: Bearer $TOKEN"
+```
+
 ## Quickstart
 
 ```sh
@@ -189,6 +313,11 @@ tests. The build is CGo-free except the race detector.
 - ☑ YAML config (multi-registry: per-registry upstream/middleware; shared storage/auth/log)
 - ☑ Middleware plugin architecture (new middleware = one file + one config entry)
 - ☑ Maven adapter skeleton (types + factory + registration; routes/storage deferred)
+- ☑ Projects: per-project configuration (`/p/<key>` routing, `PipelineContext.ProjectKey`, default-path backward compat)
+- ☑ Projects: project config store (postgres `projects` table) + `ProjectResolver` (cached, per-chain fallback to global, invalidated on admin write)
+- ☑ Projects: async/buffered dependency tracking + emit on serve (per-project SBOM; zero overhead on the default path)
+- ☑ Projects: admin REST API (`/admin/projects` CRUD + cache invalidation; shared `auth.token`)
+- ☑ Projects: SBOM query API (`GET /admin/projects/{key}/dependencies` with server-side filters)
 - ☑ TDD: unit + per-adapter + multi-registry e2e + mutation contract; CI (vet/gofmt/golangci-lint/govulncheck/race+coverage)
 
 ### Planned / future
