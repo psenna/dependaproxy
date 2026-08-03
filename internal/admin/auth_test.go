@@ -37,7 +37,7 @@ func (noopInvalidator) Invalidate(string) {}
 // bearer token.
 func TestAdminRequiresAuth(t *testing.T) {
 	logger := slog.New(slog.DiscardHandler)
-	ah := admin.New(&memStore{cfgs: map[string]project.ProjectConfig{}}, noopInvalidator{}, logger, []string{"npm"})
+	ah := admin.New(&memStore{cfgs: map[string]project.ProjectConfig{}}, nil, noopInvalidator{}, logger, []string{"npm"})
 	authd := server.TokenAuth("tok", nil, logger, ah.Handler())
 
 	// No bearer token -> 401.

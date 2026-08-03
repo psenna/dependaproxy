@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/psenna/dependaproxy/internal/config"
 	"github.com/psenna/dependaproxy/internal/project"
@@ -111,13 +113,41 @@ func (f *fakeInvalidator) count() int {
 	return len(f.keys)
 }
 
+// fakeDependencyStore is an in-memory project.DependencyStore recording the last
+// List call and returning configured records/errors.
+type fakeDependencyStore struct {
+	mu        sync.Mutex
+	recs      []project.DependencyRecord
+	gotKey    string
+	gotFilt   project.DependencyListFilters
+	listErr   error
+	listCalls int
+}
+
+func (f *fakeDependencyStore) UpsertBatch(context.Context, []project.DependencyRecord) error {
+	return nil
+}
+
+func (f *fakeDependencyStore) List(_ context.Context, key string, fl project.DependencyListFilters) ([]project.DependencyRecord, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.gotKey = key
+	f.gotFilt = fl
+	f.listCalls++
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
+	return f.recs, nil
+}
+
 // newTestHandler returns a handler wired with a fresh fake store, a recording
-// invalidator, and known registry types ["npm", "pypi"].
-func newTestHandler() (*fakeStore, *fakeInvalidator, http.Handler) {
+// invalidator, a fake dependency store, and known registry types ["npm", "pypi"].
+func newTestHandler() (*fakeStore, *fakeInvalidator, *fakeDependencyStore, http.Handler) {
 	store := newFakeStore()
 	inv := &fakeInvalidator{}
+	dep := &fakeDependencyStore{}
 	logger := slog.New(slog.DiscardHandler)
-	return store, inv, New(store, inv, logger, []string{"npm", "pypi"}).Handler()
+	return store, inv, dep, New(store, dep, inv, logger, []string{"npm", "pypi"}).Handler()
 }
 
 func doJSON(h http.Handler, method, path, body string) *httptest.ResponseRecorder {
@@ -157,7 +187,7 @@ func TestJSONToYAMLNodeEmpty(t *testing.T) {
 }
 
 func TestAdminCreate(t *testing.T) {
-	store, inv, h := newTestHandler()
+	store, inv, _, h := newTestHandler()
 	rr := doJSON(h, http.MethodPost, "/projects", `{"key":"acme","registries":{"npm":{"validation":[{"type":"cve-check","params":{"mode":"warn"}}]}}}`)
 	if rr.Code != http.StatusCreated {
 		t.Fatalf("code=%d want 201, body=%s", rr.Code, rr.Body.String())
@@ -183,7 +213,7 @@ func TestAdminCreate(t *testing.T) {
 }
 
 func TestAdminCreateDuplicate(t *testing.T) {
-	store, inv, h := newTestHandler()
+	store, inv, _, h := newTestHandler()
 	store.cfgs["acme"] = project.ProjectConfig{Key: "acme"}
 	rr := doJSON(h, http.MethodPost, "/projects", `{"key":"acme"}`)
 	if rr.Code != http.StatusConflict {
@@ -201,7 +231,7 @@ func TestAdminCreateDuplicate(t *testing.T) {
 }
 
 func TestAdminList(t *testing.T) {
-	store, _, h := newTestHandler()
+	store, _, _, h := newTestHandler()
 	store.cfgs["zeta"] = project.ProjectConfig{Key: "zeta"}
 	store.cfgs["acme"] = project.ProjectConfig{Key: "acme", Registries: map[string]config.RegistryMiddlewareConfig{
 		"npm": {Validation: []config.Middleware{{Type: "cve-check"}}},
@@ -228,7 +258,7 @@ func TestAdminList(t *testing.T) {
 }
 
 func TestAdminGet(t *testing.T) {
-	store, _, h := newTestHandler()
+	store, _, _, h := newTestHandler()
 	store.cfgs["acme"] = project.ProjectConfig{Key: "acme", Registries: map[string]config.RegistryMiddlewareConfig{
 		"npm": {Validation: []config.Middleware{{Type: "cve-check", Params: yamlNode("mode: warn")}}},
 	}}
@@ -249,7 +279,7 @@ func TestAdminGet(t *testing.T) {
 }
 
 func TestAdminGetNotFound(t *testing.T) {
-	_, _, h := newTestHandler()
+	_, _, _, h := newTestHandler()
 	rr := doJSON(h, http.MethodGet, "/projects/nope", "")
 	if rr.Code != http.StatusNotFound {
 		t.Fatalf("code=%d want 404", rr.Code)
@@ -257,7 +287,7 @@ func TestAdminGetNotFound(t *testing.T) {
 }
 
 func TestAdminPutUpsertCreate(t *testing.T) {
-	store, inv, h := newTestHandler()
+	store, inv, _, h := newTestHandler()
 	rr := doJSON(h, http.MethodPut, "/projects/acme", `{"registries":{"npm":{}}}`)
 	if rr.Code != http.StatusCreated {
 		t.Fatalf("code=%d want 201, body=%s", rr.Code, rr.Body.String())
@@ -271,7 +301,7 @@ func TestAdminPutUpsertCreate(t *testing.T) {
 }
 
 func TestAdminPutUpsertReplace(t *testing.T) {
-	store, inv, h := newTestHandler()
+	store, inv, _, h := newTestHandler()
 	store.cfgs["acme"] = project.ProjectConfig{Key: "acme"}
 	rr := doJSON(h, http.MethodPut, "/projects/acme", `{"registries":{"npm":{}}}`)
 	if rr.Code != http.StatusOK {
@@ -286,7 +316,7 @@ func TestAdminPutUpsertReplace(t *testing.T) {
 }
 
 func TestAdminDelete(t *testing.T) {
-	store, inv, h := newTestHandler()
+	store, inv, _, h := newTestHandler()
 	store.cfgs["acme"] = project.ProjectConfig{Key: "acme"}
 	rr := doJSON(h, http.MethodDelete, "/projects/acme", "")
 	if rr.Code != http.StatusNoContent {
@@ -301,7 +331,7 @@ func TestAdminDelete(t *testing.T) {
 }
 
 func TestAdminDeleteNotFound(t *testing.T) {
-	store, inv, h := newTestHandler()
+	store, inv, _, h := newTestHandler()
 	rr := doJSON(h, http.MethodDelete, "/projects/nope", "")
 	if rr.Code != http.StatusNotFound {
 		t.Fatalf("code=%d want 404", rr.Code)
@@ -315,7 +345,7 @@ func TestAdminDeleteNotFound(t *testing.T) {
 }
 
 func TestAdminMalformedJSON(t *testing.T) {
-	store, inv, h := newTestHandler()
+	store, inv, _, h := newTestHandler()
 	rr := doJSON(h, http.MethodPost, "/projects", `{not json`)
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("code=%d want 400", rr.Code)
@@ -335,7 +365,7 @@ func TestAdminBadKey(t *testing.T) {
 		{"-", `{"key":"-"}`},
 		{"bad/key", `{"key":"bad/key"}`},
 	} {
-		_, _, h := newTestHandler()
+		_, _, _, h := newTestHandler()
 		rr := doJSON(h, http.MethodPost, "/projects", tc.body)
 		if rr.Code != http.StatusBadRequest {
 			t.Errorf("key %q: code=%d want 400, body=%s", tc.key, rr.Code, rr.Body.String())
@@ -344,7 +374,7 @@ func TestAdminBadKey(t *testing.T) {
 }
 
 func TestAdminUnknownRegistryType(t *testing.T) {
-	_, _, h := newTestHandler()
+	_, _, _, h := newTestHandler()
 	rr := doJSON(h, http.MethodPost, "/projects", `{"key":"acme","registries":{"unknownreg":{}}}`)
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("code=%d want 400, body=%s", rr.Code, rr.Body.String())
@@ -361,7 +391,7 @@ func TestAdminUnknownRegistryType(t *testing.T) {
 }
 
 func TestAdminMiddlewareNoType(t *testing.T) {
-	_, _, h := newTestHandler()
+	_, _, _, h := newTestHandler()
 	rr := doJSON(h, http.MethodPost, "/projects", `{"key":"acme","registries":{"npm":{"validation":[{"params":{"mode":"warn"}}]}}}`)
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("code=%d want 400, body=%s", rr.Code, rr.Body.String())
@@ -372,7 +402,7 @@ func TestAdminMiddlewareNoType(t *testing.T) {
 }
 
 func TestAdminPutKeyMismatch(t *testing.T) {
-	_, _, h := newTestHandler()
+	_, _, _, h := newTestHandler()
 	rr := doJSON(h, http.MethodPut, "/projects/acme", `{"key":"other"}`)
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("code=%d want 400, body=%s", rr.Code, rr.Body.String())
@@ -383,7 +413,7 @@ func TestAdminPutKeyMismatch(t *testing.T) {
 }
 
 func TestAdminParamsBridge(t *testing.T) {
-	store, _, h := newTestHandler()
+	store, _, _, h := newTestHandler()
 	rr := doJSON(h, http.MethodPost, "/projects", `{"key":"acme","registries":{"npm":{"validation":[{"type":"cve-check","params":{"min_days":0}}]}}}`)
 	if rr.Code != http.StatusCreated {
 		t.Fatalf("code=%d want 201, body=%s", rr.Code, rr.Body.String())
@@ -424,4 +454,90 @@ func yamlNode(s string) yaml.Node {
 		return *n.Content[0]
 	}
 	return n
+}
+
+func TestAdminDependenciesList(t *testing.T) {
+	_, _, dep, h := newTestHandler()
+	now := time.Now().UTC()
+	dep.recs = []project.DependencyRecord{
+		{ProjectKey: "acme", Registry: "npm", Pkg: "lodash", Version: "1.0.0", ArtifactID: "lodash-1.0.0.tgz",
+			SHA256: "abc", FirstDownloadedAt: now.Add(-2 * time.Hour), LastDownloadedAt: now.Add(-time.Hour), DownloadCount: 3},
+		{ProjectKey: "acme", Registry: "pypi", Pkg: "reqs", Version: "2.0", ArtifactID: "reqs-2.0.tar.gz",
+			SHA256: "def", FirstDownloadedAt: now.Add(-time.Hour), LastDownloadedAt: now, DownloadCount: 1},
+	}
+	rr := doJSON(h, http.MethodGet, "/projects/acme/dependencies", "")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("code=%d want 200, body=%s", rr.Code, rr.Body.String())
+	}
+	if ct := rr.Header().Get("Content-Type"); ct != "application/json" {
+		t.Errorf("content-type=%q want application/json", ct)
+	}
+	var resp struct {
+		Dependencies []dependencyResp `json:"dependencies"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Dependencies) != 2 {
+		t.Fatalf("dependencies=%d want 2, body=%s", len(resp.Dependencies), rr.Body.String())
+	}
+	d0, d1 := resp.Dependencies[0], resp.Dependencies[1]
+	if d0.Registry != "npm" || d0.Pkg != "lodash" || d0.Version != "1.0.0" ||
+		d0.ArtifactID != "lodash-1.0.0.tgz" || d0.SHA256 != "abc" || d0.DownloadCount != 3 {
+		t.Errorf("row0=%+v", d0)
+	}
+	if !d0.FirstDownloadedAt.Equal(dep.recs[0].FirstDownloadedAt) || !d0.LastDownloadedAt.Equal(dep.recs[0].LastDownloadedAt) {
+		t.Errorf("row0 times=%s/%s want %s/%s", d0.FirstDownloadedAt, d0.LastDownloadedAt, dep.recs[0].FirstDownloadedAt, dep.recs[0].LastDownloadedAt)
+	}
+	if d1.Registry != "pypi" || d1.Pkg != "reqs" || d1.Version != "2.0" || d1.SHA256 != "def" || d1.DownloadCount != 1 {
+		t.Errorf("row1=%+v", d1)
+	}
+}
+
+func TestAdminDependenciesEmpty404(t *testing.T) {
+	_, _, _, h := newTestHandler()
+	rr := doJSON(h, http.MethodGet, "/projects/acme/dependencies", "")
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("code=%d want 404, body=%s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestAdminDependenciesFilters(t *testing.T) {
+	_, _, dep, h := newTestHandler()
+	dep.recs = []project.DependencyRecord{{ProjectKey: "acme", Registry: "npm", Pkg: "lodash", Version: "1.0.0"}}
+	rr := doJSON(h, http.MethodGet, "/projects/acme/dependencies?registry=npm&pkg=lodash", "")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("code=%d want 200, body=%s", rr.Code, rr.Body.String())
+	}
+	dep.mu.Lock()
+	defer dep.mu.Unlock()
+	if dep.gotKey != "acme" {
+		t.Errorf("gotKey=%q want acme", dep.gotKey)
+	}
+	if dep.gotFilt.Registry != "npm" || dep.gotFilt.Pkg != "lodash" {
+		t.Errorf("gotFilt=%+v want {npm lodash}", dep.gotFilt)
+	}
+	if dep.listCalls != 1 {
+		t.Errorf("listCalls=%d want 1", dep.listCalls)
+	}
+}
+
+func TestAdminDependenciesBadKey(t *testing.T) {
+	_, _, _, h := newTestHandler()
+	rr := doJSON(h, http.MethodGet, "/projects/bad%20key!/dependencies", "")
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("code=%d want 400, body=%s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "invalid project key") {
+		t.Errorf("body=%s", rr.Body.String())
+	}
+}
+
+func TestAdminDependenciesStoreError(t *testing.T) {
+	_, _, dep, h := newTestHandler()
+	dep.listErr = errors.New("boom")
+	rr := doJSON(h, http.MethodGet, "/projects/acme/dependencies", "")
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("code=%d want 500, body=%s", rr.Code, rr.Body.String())
+	}
 }

@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 	"regexp"
+	"time"
 
 	"github.com/psenna/dependaproxy/internal/config"
 	"github.com/psenna/dependaproxy/internal/project"
@@ -37,21 +38,25 @@ type Invalidator interface {
 // dispatching, so the routes are relative to /admin.
 type Handler struct {
 	store           project.Store
+	depStore        project.DependencyStore
 	invalidator     Invalidator
 	knownRegistries map[string]bool
 	logger          *slog.Logger
 }
 
-// New builds an admin Handler for the project store. inv receives an
-// Invalidate(key) call after every successful create/update/delete so the
-// registry resolvers drop their cached pipelines for that project. knownRegistries
-// lists the registry types configured on this instance (e.g. ["npm", "pypi"]).
-func New(store project.Store, inv Invalidator, logger *slog.Logger, knownRegistries []string) *Handler {
+// New builds an admin Handler for the project store. depStore serves the
+// per-project dependency download records; it may be nil when the server has no
+// database (the dependencies route then reports the store unavailable). inv
+// receives an Invalidate(key) call after every successful create/update/delete
+// so the registry resolvers drop their cached pipelines for that project.
+// knownRegistries lists the registry types configured on this instance (e.g.
+// ["npm", "pypi"]).
+func New(store project.Store, depStore project.DependencyStore, inv Invalidator, logger *slog.Logger, knownRegistries []string) *Handler {
 	kr := make(map[string]bool, len(knownRegistries))
 	for _, r := range knownRegistries {
 		kr[r] = true
 	}
-	return &Handler{store: store, invalidator: inv, knownRegistries: kr, logger: logger}
+	return &Handler{store: store, depStore: depStore, invalidator: inv, knownRegistries: kr, logger: logger}
 }
 
 // Handler returns the admin route mux. Routes use Go 1.22 method+path patterns.
@@ -62,6 +67,7 @@ func (h *Handler) Handler() http.Handler {
 	mux.HandleFunc("GET /projects/{key}", h.get)
 	mux.HandleFunc("PUT /projects/{key}", h.put)
 	mux.HandleFunc("DELETE /projects/{key}", h.delete)
+	mux.HandleFunc("GET /projects/{key}/dependencies", h.dependencies)
 	return mux
 }
 
@@ -98,6 +104,19 @@ type registryResp struct {
 type middlewareResp struct {
 	Type   string          `json:"type"`
 	Params json.RawMessage `json:"params,omitempty"`
+}
+
+// dependencyResp mirrors project.DependencyRecord for JSON encoding. ProjectKey
+// is omitted: it is constant for the /projects/{key}/dependencies route.
+type dependencyResp struct {
+	Registry          string    `json:"registry"`
+	Pkg               string    `json:"pkg"`
+	Version           string    `json:"version"`
+	ArtifactID        string    `json:"artifact_id"`
+	SHA256            string    `json:"sha256"`
+	FirstDownloadedAt time.Time `json:"first_downloaded_at"`
+	LastDownloadedAt  time.Time `json:"last_downloaded_at"`
+	DownloadCount     int64     `json:"download_count"`
 }
 
 // jsonToYAMLNode converts a JSON params object into a block-style yaml.Node the
@@ -182,6 +201,33 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.writeConfig(w, http.StatusOK, cfg)
+}
+
+// dependencies handles GET /projects/{key}/dependencies. It returns the project's
+// recorded artifact downloads, optionally filtered by registry and package query
+// params. An empty result (the project key has no records) is a 404.
+func (h *Handler) dependencies(w http.ResponseWriter, r *http.Request) {
+	key := r.PathValue("key")
+	if !validKey(key) {
+		h.writeError(w, http.StatusBadRequest, "invalid project key")
+		return
+	}
+	if h.depStore == nil {
+		h.writeError(w, http.StatusInternalServerError, "dependency store unavailable")
+		return
+	}
+	q := r.URL.Query()
+	recs, err := h.depStore.List(r.Context(), key, project.DependencyListFilters{Registry: q.Get("registry"), Pkg: q.Get("pkg")})
+	if err != nil {
+		h.writeError(w, http.StatusInternalServerError, "dependency store")
+		return
+	}
+	if len(recs) == 0 {
+		h.writeError(w, http.StatusNotFound, "no dependencies for project")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"dependencies": toDependencyResps(recs)})
 }
 
 // put handles PUT /projects/{key}: UPSERT. The path key is authoritative; a
@@ -292,6 +338,23 @@ func toConfigMiddlewares(ms []middlewareReq) ([]config.Middleware, error) {
 		out = append(out, config.Middleware{Type: m.Type, Params: n})
 	}
 	return out, nil
+}
+
+func toDependencyResps(recs []project.DependencyRecord) []dependencyResp {
+	out := make([]dependencyResp, 0, len(recs))
+	for _, r := range recs {
+		out = append(out, dependencyResp{
+			Registry:          r.Registry,
+			Pkg:               r.Pkg,
+			Version:           r.Version,
+			ArtifactID:        r.ArtifactID,
+			SHA256:            r.SHA256,
+			FirstDownloadedAt: r.FirstDownloadedAt,
+			LastDownloadedAt:  r.LastDownloadedAt,
+			DownloadCount:     r.DownloadCount,
+		})
+	}
+	return out
 }
 
 func toProjectResps(cfgs []project.ProjectConfig) []projectResp {
