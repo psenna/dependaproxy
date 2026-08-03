@@ -70,12 +70,14 @@ type Params struct {
 }
 
 // Ecosystem maps a pipeline registry name to an OSV ecosystem. Only registries
-// OSV covers are recognized ("npm" | "pypi"); anything else returns ok=false so
-// callers skip the check.
+// OSV covers are recognized ("npm" | "pypi" | "goproxy"); anything else returns
+// ok=false so callers skip the check. OSV's Go ecosystem is literally "Go".
 func Ecosystem(registry string) (string, bool) {
 	switch registry {
 	case "npm", "pypi":
 		return registry, true
+	case "goproxy":
+		return "Go", true
 	default:
 		return "", false
 	}

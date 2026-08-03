@@ -127,11 +127,29 @@ registries:
   #   validation: []
   #   retrieval: []
 
-  # The goproxy adapter serves the Go module proxy protocol (pass-through in
-  # v1; storage/trust flow lands in a later issue):
-  # - type: goproxy
-  #   prefix: /goproxy
-  #   upstream: https://proxy.golang.org
+  # The goproxy adapter serves the Go module proxy protocol (GOPROXY). The
+  # upstream-registry retrieval stashes the .info (*Info, incl. publication
+  # Time) in the pipeline context, which min-publication-age reads to gate on
+  # publication age. cve-check maps the registry to OSV's "Go" ecosystem.
+  - type: goproxy
+    prefix: /goproxy
+    upstream: https://proxy.golang.org
+    validation:
+      - type: min-publication-age
+        params:
+          min_days: 7
+      - type: cve-check
+        params:
+          mode: deny
+          on_error: fail_open
+    # local-disk-cache sits before upstream-registry so validated .zip/.mod/.info
+    # artifacts are served from disk on subsequent requests; the cache implements
+    # pipeline.Evictor so a sha256 mismatch (trust flow) evicts the entry.
+    retrieval:
+      - type: local-disk-cache
+        params:
+          path: /var/lib/dependaproxy/cache/goproxy
+      - type: upstream-registry
 
 # ---------------------------------------------------------------------------
 # Projects (per-project configuration + SBOM)

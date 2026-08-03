@@ -62,6 +62,37 @@ func TestLoadMulti(t *testing.T) {
 	}
 }
 
+// TestExampleConfigParses loads the repository's config.example.yaml and checks
+// the goproxy block parses with the validation + cache-retrieval chains wired.
+func TestExampleConfigParses(t *testing.T) {
+	c, err := Load(filepath.Join("..", "..", "config.example.yaml"))
+	if err != nil {
+		t.Fatalf("load config.example.yaml: %v", err)
+	}
+	if len(c.Registries) < 2 {
+		t.Fatalf("registries = %d, want >= 2", len(c.Registries))
+	}
+	var gop *RegistryConfig
+	for i := range c.Registries {
+		if c.Registries[i].Type == "goproxy" {
+			gop = &c.Registries[i]
+			break
+		}
+	}
+	if gop == nil {
+		t.Fatal("no goproxy registry in config.example.yaml")
+	}
+	if gop.Prefix != "/goproxy" || gop.Upstream != "https://proxy.golang.org" {
+		t.Errorf("goproxy prefix/upstream = %q/%q", gop.Prefix, gop.Upstream)
+	}
+	if len(gop.Validation) != 2 || gop.Validation[0].Type != "min-publication-age" || gop.Validation[1].Type != "cve-check" {
+		t.Errorf("goproxy validation = %+v", gop.Validation)
+	}
+	if len(gop.Retrieval) != 2 || gop.Retrieval[0].Type != "local-disk-cache" || gop.Retrieval[1].Type != "upstream-registry" {
+		t.Errorf("goproxy retrieval = %+v", gop.Retrieval)
+	}
+}
+
 func TestDuplicatePrefix(t *testing.T)     { wantErr(t, "dup_prefix.yaml", "duplicate prefix") }
 func TestNoRegistries(t *testing.T)        { wantErr(t, "no_registries.yaml", "at least one registry") }
 func TestBadStorage(t *testing.T)          { wantErr(t, "bad_storage.yaml", "postgres") }
