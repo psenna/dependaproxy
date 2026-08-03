@@ -6,6 +6,7 @@ import (
 	"github.com/psenna/dependaproxy/internal/adapter"
 	"github.com/psenna/dependaproxy/internal/config"
 	"github.com/psenna/dependaproxy/internal/middleware/mutation"
+	"github.com/psenna/dependaproxy/internal/middleware/mutation/stripscripts"
 	"github.com/psenna/dependaproxy/internal/middleware/retrieval/localcache"
 	"github.com/psenna/dependaproxy/internal/middleware/retrieval/s3cache"
 	"github.com/psenna/dependaproxy/internal/middleware/validation/cve"
@@ -35,6 +36,7 @@ func Factory(cfg config.RegistryConfig, deps adapter.Deps) (adapter.Adapter, err
 	reg.RegisterRetrieval("s3-cache", s3cache.Factory)
 	reg.RegisterRetrieval("upstream-registry", UpstreamFactory(client))
 	reg.RegisterMutation("noop", mutation.Factory)
+	reg.RegisterMutation("strip-install-scripts", stripscripts.Factory)
 
 	validation, err := reg.BuildValidation(cfg.Validation)
 	if err != nil {

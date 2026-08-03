@@ -118,6 +118,9 @@ func (a *pypiAdapter) serveTrusted(w http.ResponseWriter, r *http.Request, ctx *
 		a.fail(w, r, http.StatusInternalServerError, "mutation postfetch", err)
 		return
 	}
+	if ctx.Tarball != nil && ctx.Tarball.Bytes != nil {
+		body = ctx.Tarball.Bytes
+	}
 	a.trackDownload(ctx, rec.Sha256)
 	a.writeFile(w, body)
 }
@@ -165,6 +168,9 @@ func (a *pypiAdapter) serveUntrusted(w http.ResponseWriter, r *http.Request, ctx
 	if err := rp.Mutation.RunPostFetch(ctx); err != nil {
 		a.fail(w, r, http.StatusInternalServerError, "mutation postfetch", err)
 		return
+	}
+	if ctx.Tarball != nil && ctx.Tarball.Bytes != nil {
+		body = ctx.Tarball.Bytes
 	}
 	a.trackDownload(ctx, h)
 	a.writeFile(w, body)
