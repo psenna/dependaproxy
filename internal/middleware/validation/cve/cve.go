@@ -30,6 +30,7 @@ const (
 	defaultOnError  = onErrorFailOpen
 	defaultTimeout  = 10 * time.Second
 	defaultCacheTTL = time.Hour
+	defaultCacheMax = 4096
 )
 
 // Modes and error policies.
@@ -185,10 +186,14 @@ func osvEcosystem(registry string) (string, bool) {
 	}
 }
 
-// ttlCache is a tiny, concurrency-safe TTL cache for OSV query results.
+// ttlCache is a tiny, concurrency-safe TTL cache for OSV query results. It is
+// bounded by max entries so a long-running proxy can't leak memory across
+// thousands of distinct versions: once full it purges expired entries, and if
+// still full it drops the new entry (the next request simply re-queries OSV).
 type ttlCache struct {
 	mu    sync.Mutex
 	ttl   time.Duration
+	max   int
 	now   func() time.Time
 	items map[string]ttlEntry
 }
@@ -198,8 +203,8 @@ type ttlEntry struct {
 	expiry time.Time
 }
 
-func newTTLCache(ttl time.Duration, now func() time.Time) *ttlCache {
-	return &ttlCache{ttl: ttl, now: now, items: map[string]ttlEntry{}}
+func newTTLCache(ttl time.Duration, max int, now func() time.Time) *ttlCache {
+	return &ttlCache{ttl: ttl, max: max, now: now, items: map[string]ttlEntry{}}
 }
 
 func (c *ttlCache) get(key string) ([]osvVuln, bool) {
@@ -219,7 +224,22 @@ func (c *ttlCache) get(key string) ([]osvVuln, bool) {
 func (c *ttlCache) put(key string, vulns []osvVuln) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if len(c.items) >= c.max {
+		c.purgeExpiredLocked()
+	}
+	if len(c.items) >= c.max {
+		return // full even after purging; skip rather than grow unbounded
+	}
 	c.items[key] = ttlEntry{vulns: vulns, expiry: c.now().Add(c.ttl)}
+}
+
+func (c *ttlCache) purgeExpiredLocked() {
+	now := c.now()
+	for k, e := range c.items {
+		if now.After(e.expiry) {
+			delete(c.items, k)
+		}
+	}
 }
 
 type params struct {
@@ -277,6 +297,6 @@ func New(pr params, client *http.Client, now func() time.Time) *Middleware {
 		mode:     mode,
 		onError:  onError,
 		client:   client,
-		cache:    newTTLCache(ttl, now),
+		cache:    newTTLCache(ttl, defaultCacheMax, now),
 	}
 }

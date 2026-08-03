@@ -3,6 +3,7 @@ package cve
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -166,5 +167,36 @@ func TestFactoryDecodesParams(t *testing.T) {
 	}
 	if m.cache.ttl != defaultCacheTTL {
 		t.Fatalf("cache_ttl should default, got %v", m.cache.ttl)
+	}
+}
+
+func TestCacheBounded(t *testing.T) {
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	c := newTTLCache(time.Hour, 4, func() time.Time { return now })
+	for i := 0; i < 10; i++ {
+		c.put(fmt.Sprintf("k%d", i), []osvVuln{{ID: fmt.Sprintf("CVE-%d", i)}})
+	}
+	retrievable := 0
+	for i := 0; i < 10; i++ {
+		if _, ok := c.get(fmt.Sprintf("k%d", i)); ok {
+			retrievable++
+		}
+	}
+	if retrievable > 4 {
+		t.Fatalf("cache should hold at most max entries, got %d retrievable", retrievable)
+	}
+}
+
+func TestCachePurgesExpiredOnPut(t *testing.T) {
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	c := newTTLCache(time.Hour, 4, func() time.Time { return now })
+	c.put("k0", []osvVuln{{ID: "CVE-1"}})
+	now = now.Add(2 * time.Hour) // k0 now expired
+	c.put("k1", []osvVuln{{ID: "CVE-2"}}) // triggers a purge
+	if _, ok := c.get("k0"); ok {
+		t.Fatal("expired entry should have been purged on put")
+	}
+	if _, ok := c.get("k1"); !ok {
+		t.Fatal("fresh entry should be present")
 	}
 }

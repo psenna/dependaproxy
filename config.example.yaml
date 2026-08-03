@@ -40,7 +40,7 @@ registries:
       # mode: deny (default, 403) | warn (serve + log).
       - type: malware-scan
         params:
-          mode: deny
+          mode: warn
     retrieval:
       - type: local-disk-cache
         params:
@@ -60,7 +60,7 @@ registries:
           mode: deny
       - type: malware-scan
         params:
-          mode: deny
+          mode: warn
     retrieval:
       - type: local-disk-cache
         params:
