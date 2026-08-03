@@ -64,6 +64,7 @@ func (stubClient) FetchPackument(context.Context, string) (*npm.Packument, error
 	return nil, nil
 }
 func (stubClient) FetchPackumentRaw(context.Context, string) ([]byte, error) { return nil, nil }
+func (stubClient) FetchBytes(context.Context, string) ([]byte, error)        { return nil, nil }
 func (stubClient) FetchTarball(context.Context, string) (io.ReadCloser, int64, error) {
 	return nil, 0, nil
 }

@@ -29,6 +29,7 @@ func (f *fakeClient) FetchPackument(_ context.Context, _ string) (*Packument, er
 func (f *fakeClient) FetchPackumentRaw(_ context.Context, _ string) ([]byte, error) {
 	return nil, nil
 }
+func (f *fakeClient) FetchBytes(_ context.Context, _ string) ([]byte, error) { return nil, ErrNotFound }
 func (f *fakeClient) FetchTarball(_ context.Context, _ string) (io.ReadCloser, int64, error) {
 	f.tarCalls++
 	if f.tarErr != nil {

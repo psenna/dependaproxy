@@ -118,4 +118,21 @@ func (c *Client) FetchFile(ctx context.Context, fileURL string) (io.ReadCloser, 
 	return resp.Body, resp.ContentLength, nil
 }
 
+// FetchAttestations fetches the PEP 740 attestation document for a project
+// version (GET <base>/<NormalizeName(name)>/<version>/attestations/). 404 ->
+// ErrNotFound (no attestations published); the body is returned verbatim.
+func (c *Client) FetchAttestations(ctx context.Context, name, version string) ([]byte, error) {
+	target := c.base + "/" + NormalizeName(name) + "/" + version + "/attestations/"
+	resp, err := c.do(ctx, target)
+	if err != nil {
+		return nil, err
+	}
+	defer closeQuiet(resp.Body)
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("pypi: read attestations %s@%s: %w", name, version, err)
+	}
+	return b, nil
+}
+
 func closeQuiet(c io.Closer) { _ = c.Close() }

@@ -48,6 +48,7 @@ type recClient struct {
 
 func (c *recClient) FetchPackument(context.Context, string) (*Packument, error) { return c.pack, nil }
 func (c *recClient) FetchPackumentRaw(context.Context, string) ([]byte, error)  { return c.raw, nil }
+func (c *recClient) FetchBytes(context.Context, string) ([]byte, error)         { return nil, ErrNotFound }
 func (c *recClient) FetchTarball(context.Context, string) (io.ReadCloser, int64, error) {
 	c.r.record("fetch")
 	return io.NopCloser(bytes.NewReader(c.tarball)), int64(len(c.tarball)), nil

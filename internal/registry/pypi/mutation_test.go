@@ -50,6 +50,9 @@ func (c *pRecClient) FetchIndex(context.Context, string) (*Project, error) { ret
 func (c *pRecClient) FetchIndexRaw(context.Context, string, string) ([]byte, string, error) {
 	return c.raw, acceptJSON, nil
 }
+func (c *pRecClient) FetchAttestations(context.Context, string, string) ([]byte, error) {
+	return nil, ErrNotFound
+}
 func (c *pRecClient) FetchFile(context.Context, string) (io.ReadCloser, int64, error) {
 	c.r.record("fetch")
 	return io.NopCloser(bytes.NewReader(c.file)), int64(len(c.file)), nil

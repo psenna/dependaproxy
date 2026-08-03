@@ -320,6 +320,7 @@ type rawClient struct {
 	pack      *Packument
 	raw       []byte
 	tarball   []byte
+	bundle    []byte // provenance bundle served by FetchBytes
 	packCalls int32
 	tarCalls  int32
 }
@@ -329,6 +330,7 @@ func (c *rawClient) FetchPackument(_ context.Context, _ string) (*Packument, err
 	return c.pack, nil
 }
 func (c *rawClient) FetchPackumentRaw(_ context.Context, _ string) ([]byte, error) { return c.raw, nil }
+func (c *rawClient) FetchBytes(_ context.Context, _ string) ([]byte, error)        { return c.bundle, nil }
 func (c *rawClient) FetchTarball(_ context.Context, _ string) (io.ReadCloser, int64, error) {
 	atomic.AddInt32(&c.tarCalls, 1)
 	return io.NopCloser(bytes.NewReader(c.tarball)), int64(len(c.tarball)), nil
@@ -340,6 +342,9 @@ func (notFoundClient) FetchPackument(context.Context, string) (*Packument, error
 	return nil, ErrNotFound
 }
 func (notFoundClient) FetchPackumentRaw(context.Context, string) ([]byte, error) {
+	return nil, ErrNotFound
+}
+func (notFoundClient) FetchBytes(context.Context, string) ([]byte, error) {
 	return nil, ErrNotFound
 }
 func (notFoundClient) FetchTarball(context.Context, string) (io.ReadCloser, int64, error) {
@@ -369,6 +374,9 @@ func (c *captureClient) FetchPackumentRaw(ctx context.Context, name string) ([]b
 	c.packumentPkg = name
 	c.packumentKey = pipeline.ProjectKeyFromContext(ctx)
 	return c.raw, nil
+}
+func (c *captureClient) FetchBytes(context.Context, string) ([]byte, error) {
+	return nil, ErrNotFound
 }
 func (c *captureClient) FetchTarball(context.Context, string) (io.ReadCloser, int64, error) {
 	atomic.AddInt32(&c.tarCalls, 1)

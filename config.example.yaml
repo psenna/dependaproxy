@@ -41,6 +41,20 @@ registries:
       - type: malware-scan
         params:
           mode: warn
+      # Verify sigstore provenance: npm publishes the SLSA provenance
+      # attestation bundle advertised in the packument (dist.attestations.url).
+      # mode: deny (default, 403) | warn (serve + annotate). require_provenance:
+      # false (default) | true (deny when no attestation is published).
+      # on_error: fail_open (default) | fail_closed. identity: regex matched
+      # against the signing certificate SAN (unset = signature + CT/tlog are
+      # still verified against the sigstore public-good trust root, but the
+      # identity is not pinned — weaker; set it in production).
+      # - type: provenance-verify
+      #   params:
+      #     mode: deny
+      #     require_provenance: false
+      #     on_error: fail_open
+      #     # identity: "^https://github.com/psenna/"
     # cve-check-retrieval MUST be FIRST in the retrieval list (outermost) so it
     # runs on EVERY serve — trusted (cache hit) and untrusted — re-checking OSV
     # for a CVE published after the artifact was first validated. The validation
@@ -80,6 +94,15 @@ registries:
       - type: malware-scan
         params:
           mode: warn
+      # Verify PEP 740 attestations (sigstore bundles) served at the simple-API
+      # /<project>/<version>/attestations/ endpoint. Params as in the npm block
+      # above.
+      # - type: provenance-verify
+      #   params:
+      #     mode: deny
+      #     require_provenance: false
+      #     on_error: fail_open
+      #     # identity: "^https://github.com/psenna/"
     # cve-check-retrieval MUST be FIRST in the retrieval list (outermost) so it
     # runs on EVERY serve — trusted (cache hit) and untrusted — re-checking OSV
     # for a CVE published after the artifact was first validated. The validation
