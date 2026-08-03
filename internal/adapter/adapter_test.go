@@ -13,6 +13,7 @@ func (f fakeAdapter) Prefix() string { return f.prefix }
 func (f fakeAdapter) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(204) })
 }
+func (f fakeAdapter) InvalidateProjectCache(string) {}
 
 func TestBuildUnknownType(t *testing.T) {
 	Register("unknown-test-type", func(_ config.RegistryConfig, _ Deps) (Adapter, error) {

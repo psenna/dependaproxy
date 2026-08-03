@@ -31,6 +31,10 @@ type pypiAdapter struct {
 // Prefix returns the URL path prefix.
 func (a *pypiAdapter) Prefix() string { return a.prefix }
 
+// InvalidateProjectCache drops the cached Resolved pipelines for key so the
+// next project-scoped request re-reads the project store.
+func (a *pypiAdapter) InvalidateProjectCache(key string) { a.resolver.Invalidate(key) }
+
 // Handler serves the PyPI routes (paths are relative to the prefix — the server
 // strips the prefix before dispatching).
 func (a *pypiAdapter) Handler() http.Handler {
