@@ -29,6 +29,18 @@ registries:
       - type: min-publication-age
         params:
           min_days: 7
+      # Reject (or warn about) packages with known vulnerabilities, checked
+      # against OSV.dev at validation time. mode: deny (default, 403) | warn
+      # (serve + log). on_error: fail_open (default) | fail_closed.
+      - type: cve-check
+        params:
+          mode: deny
+      # Static heuristics on the tarball: npm install scripts + suspicious
+      # script contents; pypi setup.py/PKG-INFO patterns + wheel exec files.
+      # mode: deny (default, 403) | warn (serve + log).
+      - type: malware-scan
+        params:
+          mode: warn
     retrieval:
       - type: local-disk-cache
         params:
@@ -43,6 +55,12 @@ registries:
       - type: min-publication-age
         params:
           min_days: 7
+      - type: cve-check
+        params:
+          mode: deny
+      - type: malware-scan
+        params:
+          mode: warn
     retrieval:
       - type: local-disk-cache
         params:

@@ -1,10 +1,14 @@
 // Package localcache implements the shared, registry-agnostic write-through
-// local disk cache for validated artifacts. It sits before the
-// upstream-registry middleware in the decorator chain: on a hit it serves from
-// disk; on a miss it calls next and atomically writes the result back. The
-// cache key is (registry, name, version, artifactID) read from the pipeline
+// artifact cache for validated artifacts. It sits before the upstream-registry
+// middleware in the decorator chain: on a hit it serves from the cache backend;
+// on a miss it calls next and write-through stores the result.
+//
+// The cache key is (registry, name, version, artifactID) read from the pipeline
 // context — npm uses artifactID="" (name+version), pypi uses the filename,
-// maven uses "classifier:type".
+// maven uses "classifier:type". The key is a platform-independent relative path
+// (<registry>/<name...>/<version>.bin or .../<artifactID>.bin) that a CacheBackend
+// maps to its storage (a file under a base dir for DiskBackend, an object key
+// for an S3 backend).
 package localcache
 
 import (
@@ -18,67 +22,31 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Middleware is a write-through local disk cache for artifacts.
-type Middleware struct {
-	base  string
-	next  pipeline.RetrievalMiddleware
-	locks keyLocks
+// CacheBackend stores and retrieves validated artifact bytes by cache key. A
+// miss is reported with os.ErrNotExist. Implementations must be safe for
+// concurrent use.
+type CacheBackend interface {
+	Get(key string) ([]byte, error)
+	Put(key string, data []byte) error
+	Delete(key string) error
 }
 
-// New returns a local-disk-cache middleware rooted at base, wrapping next.
-func New(base string, next pipeline.RetrievalMiddleware) *Middleware {
-	return &Middleware{base: base, next: next, locks: keyLocks{locks: map[string]*sync.Mutex{}}}
+// DiskBackend stores artifacts under a base directory on the local filesystem.
+type DiskBackend struct {
+	base string
 }
 
-// Name returns the config type string.
-func (*Middleware) Name() string { return "local-disk-cache" }
+// NewDisk returns a DiskBackend rooted at base.
+func NewDisk(base string) *DiskBackend { return &DiskBackend{base: base} }
 
-// Fetch serves a cached artifact on a hit; on a miss it calls next and
-// write-through caches the result. A per-key mutex serializes concurrent
-// requests for the same key so the upstream is fetched once.
-func (m *Middleware) Fetch(ctx *pipeline.PipelineContext) (bool, error) {
-	path, err := cachePath(m.base, ctx.Registry, ctx.PkgName, ctx.Version, ctx.ArtifactID)
-	if err != nil {
-		return false, err
-	}
-	lk := m.locks.lock(path)
-	lk.Lock()
-	defer lk.Unlock()
-
-	if data, rerr := os.ReadFile(path); rerr == nil { //nolint:gosec // G304: path is sanitized via cachePath
-		ctx.Tarball = &pipeline.Tarball{Bytes: data}
-		return true, nil
-	} else if !os.IsNotExist(rerr) {
-		_ = os.Remove(path)
-	}
-
-	if m.next == nil {
-		return false, pipeline.ErrNoResolver
-	}
-	hit, err := m.next.Fetch(ctx)
-	if err != nil || !hit {
-		return hit, err
-	}
-	if ctx.Tarball != nil {
-		_ = m.writeAtomic(path, ctx.Tarball.Bytes)
-	}
-	return true, nil
+// Get reads the artifact at base/key.
+func (b *DiskBackend) Get(key string) ([]byte, error) {
+	return os.ReadFile(filepath.Join(b.base, key)) //nolint:gosec // G304: key is sanitized via cacheKey
 }
 
-// Evict removes the cached artifact for the key (used by the server when a
-// cached artifact fails integrity verification). A missing file is not an error.
-func (m *Middleware) Evict(ctx *pipeline.PipelineContext) error {
-	path, err := cachePath(m.base, ctx.Registry, ctx.PkgName, ctx.Version, ctx.ArtifactID)
-	if err != nil {
-		return err
-	}
-	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-		return err
-	}
-	return nil
-}
-
-func (m *Middleware) writeAtomic(path string, data []byte) error {
+// Put atomically writes the artifact at base/key (temp file + rename).
+func (b *DiskBackend) Put(key string, data []byte) error {
+	path := filepath.Join(b.base, key)
 	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return err
 	}
@@ -98,23 +66,107 @@ func (m *Middleware) writeAtomic(path string, data []byte) error {
 	return os.Rename(tmpName, path)
 }
 
-// cachePath builds a sanitized cache path:
-//   - artifactID == "": <base>/<registry>/<name...>/<version>.bin
-//   - artifactID != "": <base>/<registry>/<name...>/<version>/<artifactID>.bin
+// Delete removes the artifact at base/key; a missing file is not an error.
+func (b *DiskBackend) Delete(key string) error {
+	err := os.Remove(filepath.Join(b.base, key))
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
+// Middleware is a write-through cache for artifacts over any CacheBackend.
+type Middleware struct {
+	name    string
+	backend CacheBackend
+	next    pipeline.RetrievalMiddleware
+	locks   keyLocks
+}
+
+// New returns a local-disk-cache middleware (DiskBackend rooted at base)
+// wrapping next. Kept for backwards compatibility; prefer NewBackend when
+// wrapping a non-disk backend.
+func New(base string, next pipeline.RetrievalMiddleware) *Middleware {
+	return NewBackend(NewDisk(base), next)
+}
+
+// NewBackend returns a cache middleware over an arbitrary CacheBackend,
+// wrapping next.
+func NewBackend(backend CacheBackend, next pipeline.RetrievalMiddleware) *Middleware {
+	return newMiddleware("local-disk-cache", backend, next)
+}
+
+// NewNamedBackend is NewBackend with a custom middleware name (e.g. "s3-cache"
+// when the backend is object storage).
+func NewNamedBackend(name string, backend CacheBackend, next pipeline.RetrievalMiddleware) *Middleware {
+	return newMiddleware(name, backend, next)
+}
+
+func newMiddleware(name string, backend CacheBackend, next pipeline.RetrievalMiddleware) *Middleware {
+	return &Middleware{name: name, backend: backend, next: next, locks: keyLocks{locks: map[string]*sync.Mutex{}}}
+}
+
+// Name returns the config type string.
+func (m *Middleware) Name() string { return m.name }
+
+// Fetch serves a cached artifact on a hit; on a miss it calls next and
+// write-through caches the result. A per-key mutex serializes concurrent
+// requests for the same key so the upstream is fetched once.
+func (m *Middleware) Fetch(ctx *pipeline.PipelineContext) (bool, error) {
+	key, err := cacheKey(ctx.Registry, ctx.PkgName, ctx.Version, ctx.ArtifactID)
+	if err != nil {
+		return false, err
+	}
+	lk := m.locks.lock(key)
+	lk.Lock()
+	defer lk.Unlock()
+
+	if data, rerr := m.backend.Get(key); rerr == nil {
+		ctx.Tarball = &pipeline.Tarball{Bytes: data}
+		return true, nil
+	} else if !os.IsNotExist(rerr) {
+		// Unreadable cached entry (e.g. corrupt disk file): drop it, treat as miss.
+		_ = m.backend.Delete(key)
+	}
+
+	if m.next == nil {
+		return false, pipeline.ErrNoResolver
+	}
+	hit, err := m.next.Fetch(ctx)
+	if err != nil || !hit {
+		return hit, err
+	}
+	if ctx.Tarball != nil {
+		_ = m.backend.Put(key, ctx.Tarball.Bytes)
+	}
+	return true, nil
+}
+
+// Evict removes the cached artifact for the key (used by the server when a
+// cached artifact fails integrity verification). A missing entry is not an error.
+func (m *Middleware) Evict(ctx *pipeline.PipelineContext) error {
+	key, err := cacheKey(ctx.Registry, ctx.PkgName, ctx.Version, ctx.ArtifactID)
+	if err != nil {
+		return err
+	}
+	return m.backend.Delete(key)
+}
+
+// cacheKey derives the cache key — a relative, platform-independent path — from
+// the pipeline identity:
+//   - artifactID == "": <registry>/<name...>/<version>.bin
+//   - artifactID != "": <registry>/<name...>/<version>/<artifactID>.bin
 //
 // name may contain "/" (npm scoped names, maven group paths); each segment is
 // validated. Path traversal segments are rejected.
-func cachePath(base, registry, name, version, artifactID string) (string, error) {
+func cacheKey(registry, name, version, artifactID string) (string, error) {
 	regSeg, err := sanitize(registry, "registry")
 	if err != nil {
 		return "", err
 	}
 	nameParts := strings.Split(name, "/")
-	segs := append([]string{base, regSeg}, nameParts...)
-	for i, seg := range segs {
-		if i == 0 { // base is operator-provided; do not sanitize it
-			continue
-		}
+	segs := append([]string{regSeg}, nameParts...)
+	for _, seg := range segs {
 		if !validSeg(seg) {
 			return "", fmt.Errorf("localcache: invalid path segment %q", seg)
 		}

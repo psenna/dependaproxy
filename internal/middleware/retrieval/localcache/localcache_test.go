@@ -154,3 +154,66 @@ func TestFactoryEmpty(t *testing.T) {
 		t.Errorf("name = %q", mw.Name())
 	}
 }
+
+// memBackend is an in-process CacheBackend for tests.
+type memBackend struct {
+	mu   sync.Mutex
+	data map[string][]byte
+}
+
+func newMemBackend() *memBackend { return &memBackend{data: map[string][]byte{}} }
+
+func (b *memBackend) Get(key string) ([]byte, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	d, ok := b.data[key]
+	if !ok {
+		return nil, os.ErrNotExist
+	}
+	return d, nil
+}
+func (b *memBackend) Put(key string, data []byte) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.data[key] = append([]byte(nil), data...)
+	return nil
+}
+func (b *memBackend) Delete(key string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	delete(b.data, key)
+	return nil
+}
+
+// TestBackendAgnostic proves the middleware serves/write-through/evicts through
+// any CacheBackend (the S3 backend plugs in here), using the derived key.
+func TestBackendAgnostic(t *testing.T) {
+	backend := newMemBackend()
+	n := &nextStub{data: []byte("TARBALL")}
+	m := NewBackend(backend, n)
+
+	c := ctx("4.18.0", "")
+	if hit, err := m.Fetch(c); err != nil || !hit {
+		t.Fatalf("fetch: hit=%v err=%v", hit, err)
+	}
+	key := "npm/express/4.18.0.bin"
+	if _, ok := backend.data[key]; !ok {
+		t.Fatalf("backend should hold the artifact under the derived key %q", key)
+	}
+
+	// A fresh middleware over the same backend serves the hit without calling next.
+	m2 := NewBackend(backend, &nextStub{data: []byte("SHOULD-NOT-USE")})
+	c2 := ctx("4.18.0", "")
+	if hit, err := m2.Fetch(c2); err != nil || !hit {
+		t.Fatalf("second fetch: hit=%v err=%v", hit, err)
+	}
+	if string(c2.Tarball.Bytes) != "TARBALL" {
+		t.Fatalf("cache hit served %q want TARBALL", c2.Tarball.Bytes)
+	}
+	if err := m2.Evict(c2); err != nil {
+		t.Fatalf("evict: %v", err)
+	}
+	if _, ok := backend.data[key]; ok {
+		t.Fatal("evict should remove the key from the backend")
+	}
+}
