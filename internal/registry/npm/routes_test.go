@@ -22,6 +22,7 @@ import (
 	"github.com/psenna/dependaproxy/internal/middleware/mutation"
 	"github.com/psenna/dependaproxy/internal/middleware/retrieval/localcache"
 	"github.com/psenna/dependaproxy/internal/pipeline"
+	"github.com/psenna/dependaproxy/internal/project"
 	"gopkg.in/yaml.v3"
 )
 
@@ -58,9 +59,33 @@ func yamlNode(s string) yaml.Node {
 	return n
 }
 
+// fakeProjectStore is an in-memory project.Store used by adapter tests: every
+// key resolves to ErrProjectNotFound so the resolver falls back to the global
+// pipelines (byte-identical to the pre-project-routing default path).
+type fakeProjectStore struct{}
+
+func (fakeProjectStore) Get(_ context.Context, _ string) (project.ProjectConfig, error) {
+	return project.ProjectConfig{}, project.ErrProjectNotFound
+}
+func (fakeProjectStore) Put(context.Context, project.ProjectConfig) error { return nil }
+func (fakeProjectStore) List(context.Context) ([]project.ProjectConfig, error) {
+	return nil, nil
+}
+func (fakeProjectStore) Delete(context.Context, string) error { return nil }
+
 // newTestAdapter builds an npmAdapter wired with a memStore + fake client + the
-// configured pipelines (localcache(dir) -> upstream -> min-pub-age).
+// configured pipelines (localcache(dir) -> upstream -> min-pub-age), all as the
+// global (default) Resolved.
 func newTestAdapter(t *testing.T, prefix, dir string, minDays int, client RegistryClient, store Store) *npmAdapter {
+	t.Helper()
+	return newTestAdapterWithGlobal(t, prefix, dir, minDays, client, store, nil)
+}
+
+// newTestAdapterWithGlobal is newTestAdapter with an optional global Resolved
+// override: any zero chain in the override is filled from the locally-built
+// default pipelines, so callers can replace just one chain (e.g. Mutation) while
+// keeping the rest byte-identical.
+func newTestAdapterWithGlobal(t *testing.T, prefix, dir string, minDays int, client RegistryClient, store Store, global *project.Resolved) *npmAdapter {
 	t.Helper()
 	reg := pipeline.NewRegistry()
 	reg.RegisterValidation("min-publication-age", MinPubFactory)
@@ -85,20 +110,31 @@ func newTestAdapter(t *testing.T, prefix, dir string, minDays int, client Regist
 	}
 	mp.Chain = []pipeline.MutationMiddleware{mutation.NoOp{}}
 
-	var cache evicter
-	if e, ok := retrieval.Head.(evicter); ok {
+	var cache pipeline.Evictor
+	if e, ok := retrieval.Head.(pipeline.Evictor); ok {
 		cache = e
 	}
+	if global == nil {
+		global = &project.Resolved{Validation: validation, Retrieval: retrieval, Mutation: mp, Cache: cache}
+	}
+	if global.Validation.Chain == nil {
+		global.Validation = validation
+	}
+	if global.Retrieval.Head == nil {
+		global.Retrieval = retrieval
+		global.Cache = cache
+	}
+	if global.Mutation.Chain == nil {
+		global.Mutation = mp
+	}
+	resolver := project.NewResolver("npm", reg, fakeProjectStore{}, global)
 	return &npmAdapter{
-		prefix:     prefix,
-		storage:    store,
-		client:     client,
-		validation: validation,
-		retrieval:  retrieval,
-		mutation:   mp,
-		cache:      cache,
-		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
-		now:        func() time.Time { return time.Now().UTC() },
+		prefix:   prefix,
+		storage:  store,
+		client:   client,
+		resolver: resolver,
+		logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+		now:      func() time.Time { return time.Now().UTC() },
 	}
 }
 
@@ -400,9 +436,9 @@ func TestNpmProjectTarballSetsKey(t *testing.T) {
 	store := newMemStore()
 	pack, raw := buildPack(time.Now().AddDate(0, 0, -30), []byte("TARBALL"))
 	c := &captureClient{pack: pack, raw: raw, tarball: []byte("TARBALL")}
-	a := newTestAdapter(t, "/npm", dir, 0, c, store)
 	rec := &projKeyRecorder{}
-	a.mutation = pipeline.MutationPipeline{Chain: []pipeline.MutationMiddleware{rec}}
+	global := &project.Resolved{Mutation: pipeline.MutationPipeline{Chain: []pipeline.MutationMiddleware{rec}}}
+	a := newTestAdapterWithGlobal(t, "/npm", dir, 0, c, store, global)
 	srv := newTestServer(t, a)
 
 	resp, err := http.Get(srv.URL + "/npm/p/myproj/testpkg/-/1.0.0") //nolint:gosec // G107: proxy URL under test
@@ -428,9 +464,9 @@ func TestNpmPackagePTarballUnchanged(t *testing.T) {
 	dir := t.TempDir()
 	pack, raw := buildPack(time.Now().AddDate(0, 0, -30), []byte("TARBALL"))
 	c := &captureClient{pack: pack, raw: raw, tarball: []byte("TARBALL")}
-	a := newTestAdapter(t, "/npm", dir, 0, c, newMemStore())
 	rec := &projKeyRecorder{}
-	a.mutation = pipeline.MutationPipeline{Chain: []pipeline.MutationMiddleware{rec}}
+	global := &project.Resolved{Mutation: pipeline.MutationPipeline{Chain: []pipeline.MutationMiddleware{rec}}}
+	a := newTestAdapterWithGlobal(t, "/npm", dir, 0, c, newMemStore(), global)
 	srv := newTestServer(t, a)
 
 	resp, err := http.Get(srv.URL + "/npm/p/-/lodash-1.0.0.tgz") //nolint:gosec // G107: proxy URL under test

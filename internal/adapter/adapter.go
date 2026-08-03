@@ -14,13 +14,15 @@ import (
 	"time"
 
 	"github.com/psenna/dependaproxy/internal/config"
+	"github.com/psenna/dependaproxy/internal/project"
 )
 
 // Deps are shared dependencies passed to every adapter factory.
 type Deps struct {
-	DB     *sql.DB // shared postgres connection pool
-	Logger *slog.Logger
-	Now    func() time.Time
+	DB           *sql.DB // shared postgres connection pool
+	ProjectStore project.Store
+	Logger       *slog.Logger
+	Now          func() time.Time
 }
 
 // Adapter is one registry plugin. It owns its data model, client, routes,

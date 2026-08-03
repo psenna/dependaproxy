@@ -63,6 +63,16 @@ type Middleware struct {
 	Params yaml.Node `yaml:"params"`
 }
 
+// RegistryMiddlewareConfig is the per-registry middleware portion of a project
+// config (no Type/Prefix/Upstream — those are fixed by the adapter). Mirrors the
+// middleware lists in RegistryConfig so the same factory decode path
+// (config.Middleware.Params yaml.Node) is reused unchanged.
+type RegistryMiddlewareConfig struct {
+	Validation []Middleware `yaml:"validation"`
+	Retrieval  []Middleware `yaml:"retrieval"`
+	Mutation   []Middleware `yaml:"mutation"`
+}
+
 // Load reads, parses and validates the configuration file at path.
 func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path) //nolint:gosec // G304: config path is trusted operator input

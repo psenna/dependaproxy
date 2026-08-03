@@ -12,25 +12,19 @@ import (
 
 	"github.com/psenna/dependaproxy/internal/hash"
 	"github.com/psenna/dependaproxy/internal/pipeline"
+	"github.com/psenna/dependaproxy/internal/project"
 	"github.com/psenna/dependaproxy/internal/pypifilename"
 )
 
-// evicter is implemented by the cache middleware (localcache.Middleware).
-type evicter interface {
-	Evict(ctx *pipeline.PipelineContext) error
-}
-
-// pypiAdapter is the PyPI registry adapter.
+// pypiAdapter is the PyPI registry adapter. Pipelines are resolved per request
+// scope (default or project) via the project resolver.
 type pypiAdapter struct {
-	prefix     string
-	storage    Store
-	client     RegistryClient
-	validation pipeline.ValidationPipeline
-	retrieval  pipeline.RetrievalPipeline
-	mutation   pipeline.MutationPipeline
-	cache      evicter
-	logger     *slog.Logger
-	now        func() time.Time
+	prefix   string
+	storage  Store
+	client   RegistryClient
+	resolver *project.Resolver
+	logger   *slog.Logger
+	now      func() time.Time
 }
 
 // Prefix returns the URL path prefix.
@@ -84,46 +78,51 @@ func (a *pypiAdapter) handleFile(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := pipeline.NewPipelineContext(r.Context(), a.logger, "pypi", pkg, version, filename)
 	ctx.ProjectKey = pipeline.ProjectKeyFromContext(r.Context())
-	if err := a.mutation.RunPreFetch(ctx); err != nil {
+	rp, err := a.resolver.Resolve(ctx.ProjectKey)
+	if err != nil {
+		a.fail(w, r, http.StatusInternalServerError, "resolve project", err)
+		return
+	}
+	if err := rp.Mutation.RunPreFetch(ctx); err != nil {
 		a.fail(w, r, http.StatusInternalServerError, "mutation prefetch", err)
 		return
 	}
 	rec, err := a.storage.Get(ctx.Ctx, pkg, version, filename)
 	if err == nil {
-		a.serveTrusted(w, r, ctx, rec)
+		a.serveTrusted(w, r, ctx, rp, rec)
 		return
 	}
 	if !errors.Is(err, ErrNotFound) {
 		a.fail(w, r, http.StatusInternalServerError, "storage", err)
 		return
 	}
-	a.serveUntrusted(w, r, ctx, pkg, version, filename)
+	a.serveUntrusted(w, r, ctx, rp, pkg, version, filename)
 }
 
-func (a *pypiAdapter) serveTrusted(w http.ResponseWriter, r *http.Request, ctx *pipeline.PipelineContext, rec Record) {
-	body, err := a.fetchBytes(ctx)
+func (a *pypiAdapter) serveTrusted(w http.ResponseWriter, r *http.Request, ctx *pipeline.PipelineContext, rp *project.Resolved, rec Record) {
+	body, err := a.fetchBytes(ctx, rp)
 	if err != nil {
 		a.fetchErr(w, r, err)
 		return
 	}
-	body, ok := a.verifyOrEvict(w, r, ctx, rec.Sha256, body)
+	body, ok := a.verifyOrEvict(w, r, ctx, rp, rec.Sha256, body)
 	if !ok {
 		return
 	}
-	if err := a.mutation.RunPostFetch(ctx); err != nil {
+	if err := rp.Mutation.RunPostFetch(ctx); err != nil {
 		a.fail(w, r, http.StatusInternalServerError, "mutation postfetch", err)
 		return
 	}
 	a.writeFile(w, body)
 }
 
-func (a *pypiAdapter) serveUntrusted(w http.ResponseWriter, r *http.Request, ctx *pipeline.PipelineContext, pkg, version, filename string) {
-	body, err := a.fetchBytes(ctx)
+func (a *pypiAdapter) serveUntrusted(w http.ResponseWriter, r *http.Request, ctx *pipeline.PipelineContext, rp *project.Resolved, pkg, version, filename string) {
+	body, err := a.fetchBytes(ctx, rp)
 	if err != nil {
 		a.fetchErr(w, r, err)
 		return
 	}
-	if err := a.validation.Run(ctx); err != nil {
+	if err := rp.Validation.Run(ctx); err != nil {
 		a.fail(w, r, http.StatusForbidden, "validation rejected", err)
 		return
 	}
@@ -157,14 +156,14 @@ func (a *pypiAdapter) serveUntrusted(w http.ResponseWriter, r *http.Request, ctx
 		a.fail(w, r, http.StatusInternalServerError, "store", err)
 		return
 	}
-	if err := a.mutation.RunPostFetch(ctx); err != nil {
+	if err := rp.Mutation.RunPostFetch(ctx); err != nil {
 		a.fail(w, r, http.StatusInternalServerError, "mutation postfetch", err)
 		return
 	}
 	a.writeFile(w, body)
 }
 
-func (a *pypiAdapter) verifyOrEvict(w http.ResponseWriter, r *http.Request, ctx *pipeline.PipelineContext, expected string, body []byte) ([]byte, bool) {
+func (a *pypiAdapter) verifyOrEvict(w http.ResponseWriter, r *http.Request, ctx *pipeline.PipelineContext, rp *project.Resolved, expected string, body []byte) ([]byte, bool) {
 	ok, _, err := hash.VerifyHex(expected, bytes.NewReader(body))
 	if err != nil {
 		a.fail(w, r, http.StatusInternalServerError, "verify hash", err)
@@ -173,11 +172,11 @@ func (a *pypiAdapter) verifyOrEvict(w http.ResponseWriter, r *http.Request, ctx 
 	if ok {
 		return body, true
 	}
-	if a.cache != nil {
-		_ = a.cache.Evict(ctx)
+	if rp.Cache != nil {
+		_ = rp.Cache.Evict(ctx)
 	}
 	ctx.Tarball = nil // force the upstream middleware to re-fetch the file
-	refetched, err := a.fetchBytes(ctx)
+	refetched, err := a.fetchBytes(ctx, rp)
 	if err != nil {
 		a.fetchErr(w, r, err)
 		return nil, false
@@ -195,8 +194,8 @@ func (a *pypiAdapter) verifyOrEvict(w http.ResponseWriter, r *http.Request, ctx 
 	return refetched, true
 }
 
-func (a *pypiAdapter) fetchBytes(ctx *pipeline.PipelineContext) ([]byte, error) {
-	if err := a.retrieval.Run(ctx); err != nil {
+func (a *pypiAdapter) fetchBytes(ctx *pipeline.PipelineContext, rp *project.Resolved) ([]byte, error) {
+	if err := rp.Retrieval.Run(ctx); err != nil {
 		return nil, err
 	}
 	if ctx.Tarball == nil {

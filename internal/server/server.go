@@ -6,6 +6,7 @@ package server
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"github.com/psenna/dependaproxy/internal/adapter"
 	"github.com/psenna/dependaproxy/internal/config"
 	"github.com/psenna/dependaproxy/internal/log"
+	"github.com/psenna/dependaproxy/internal/project"
 )
 
 // Server is the aggregate HTTP server for all configured registries.
@@ -29,6 +31,15 @@ type Server struct {
 func New(ctx context.Context, cfg *config.Config, db *sql.DB) (*Server, error) {
 	logger := log.New(cfg.Log.Format, cfg.Log.Level)
 	deps := adapter.Deps{DB: db, Logger: logger, Now: func() time.Time { return time.Now().UTC() }}
+	// The project store shares the DB pool. nil db is used by dispatch-only tests
+	// with fake adapters that never touch storage; ProjectStore stays nil there.
+	if db != nil {
+		projectStore, err := project.OpenStore(ctx, db)
+		if err != nil {
+			return nil, fmt.Errorf("open project store: %w", err)
+		}
+		deps.ProjectStore = projectStore
+	}
 	adapters, err := adapter.Build(cfg.Registries, deps)
 	if err != nil {
 		return nil, err

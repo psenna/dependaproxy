@@ -19,6 +19,7 @@ import (
 	"github.com/psenna/dependaproxy/internal/middleware/retrieval/localcache"
 	"github.com/psenna/dependaproxy/internal/middleware/retrieval/s3cache"
 	"github.com/psenna/dependaproxy/internal/pipeline"
+	"github.com/psenna/dependaproxy/internal/project"
 )
 
 // TestS3CacheTrustFlow runs the full npm trust flow against a real MinIO/S3:
@@ -75,20 +76,18 @@ func TestS3CacheTrustFlow(t *testing.T) {
 	}
 	mp.Chain = []pipeline.MutationMiddleware{mutation.NoOp{}}
 
-	var cache evicter
-	if e, ok := retrieval.Head.(evicter); ok {
-		cache = e
+	global := &project.Resolved{Validation: validation, Retrieval: retrieval, Mutation: mp}
+	if e, ok := retrieval.Head.(pipeline.Evictor); ok {
+		global.Cache = e
 	}
+	resolver := project.NewResolver("npm", reg, fakeProjectStore{}, global)
 	a := &npmAdapter{
-		prefix:     "/npm",
-		storage:    store,
-		client:     client,
-		validation: validation,
-		retrieval:  retrieval,
-		mutation:   mp,
-		cache:      cache,
-		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
-		now:        func() time.Time { return time.Now().UTC() },
+		prefix:   "/npm",
+		storage:  store,
+		client:   client,
+		resolver: resolver,
+		logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+		now:      func() time.Time { return time.Now().UTC() },
 	}
 	srv := newTestServer(t, a)
 
