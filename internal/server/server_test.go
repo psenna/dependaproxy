@@ -16,6 +16,7 @@ func (f fakeAd) Prefix() string { return f.prefix }
 func (f fakeAd) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(204) })
 }
+func (f fakeAd) InvalidateProjectCache(string) {}
 
 func newDispatchServer(t *testing.T, token string) *Server {
 	t.Helper()

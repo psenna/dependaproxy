@@ -34,6 +34,10 @@ func (a *npmAdapter) Prefix() string { return a.prefix }
 // strips the prefix before dispatching).
 func (a *npmAdapter) Handler() http.Handler { return http.HandlerFunc(a.serve) }
 
+// InvalidateProjectCache drops the cached Resolved pipelines for key so the
+// next project-scoped request re-reads the project store.
+func (a *npmAdapter) InvalidateProjectCache(key string) { a.resolver.Invalidate(key) }
+
 func (a *npmAdapter) serve(w http.ResponseWriter, r *http.Request) {
 	remaining, key := pipeline.ParseProjectPath(r.URL.Path)
 	if key != "" {

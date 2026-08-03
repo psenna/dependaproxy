@@ -34,6 +34,10 @@ type Adapter interface {
 	// Handler serves this registry's routes. The server strips the prefix
 	// before dispatching, so the handler sees paths relative to its prefix.
 	Handler() http.Handler
+	// InvalidateProjectCache drops the cached Resolved pipelines for the given
+	// project key in this adapter's project.Resolver, so the next request re-reads
+	// the project store. Adapters without a resolver implement this as a no-op.
+	InvalidateProjectCache(key string)
 }
 
 // Factory builds an adapter from its RegistryConfig + shared Deps.

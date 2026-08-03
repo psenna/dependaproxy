@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/psenna/dependaproxy/internal/adapter"
+	"github.com/psenna/dependaproxy/internal/admin"
 	"github.com/psenna/dependaproxy/internal/config"
 	"github.com/psenna/dependaproxy/internal/log"
 	"github.com/psenna/dependaproxy/internal/project"
@@ -20,11 +21,12 @@ import (
 
 // Server is the aggregate HTTP server for all configured registries.
 type Server struct {
-	cfg      *config.Config
-	db       *sql.DB
-	adapters []adapter.Adapter
-	tracker  *project.Tracker
-	logger   *slog.Logger
+	cfg          *config.Config
+	db           *sql.DB
+	adapters     []adapter.Adapter
+	projectStore project.Store
+	tracker      *project.Tracker
+	logger       *slog.Logger
 }
 
 // New opens no resources itself; it builds the adapters from cfg using the
@@ -37,13 +39,15 @@ func New(ctx context.Context, cfg *config.Config, db *sql.DB) (*Server, error) {
 	// The project + dependency stores share the DB pool. nil db is used by
 	// dispatch-only tests with fake adapters that never touch storage; the store
 	// and tracker stay nil there.
+	var projectStore project.Store
 	var tracker *project.Tracker
 	if db != nil {
-		projectStore, err := project.OpenStore(ctx, db)
+		ps, err := project.OpenStore(ctx, db)
 		if err != nil {
 			return nil, fmt.Errorf("open project store: %w", err)
 		}
-		deps.ProjectStore = projectStore
+		projectStore = ps
+		deps.ProjectStore = ps
 
 		depStore, err := project.OpenDependencyStore(ctx, db)
 		if err != nil {
@@ -62,7 +66,7 @@ func New(ctx context.Context, cfg *config.Config, db *sql.DB) (*Server, error) {
 		}
 		return nil, err
 	}
-	return &Server{cfg: cfg, db: db, adapters: adapters, tracker: tracker, logger: logger}, nil
+	return &Server{cfg: cfg, db: db, adapters: adapters, projectStore: projectStore, tracker: tracker, logger: logger}, nil
 }
 
 // Handler returns the HTTP handler: /healthz (open) + one mount per adapter at
@@ -73,12 +77,45 @@ func (s *Server) Handler() http.Handler {
 		w.Header().Set("Content-Type", "text/plain")
 		_, _ = w.Write([]byte("ok"))
 	})
+	// The admin API is mounted on the same mux so the shared TokenAuth wrap
+	// below gates it. It is only present when a project store exists (db != nil).
+	if s.projectStore != nil {
+		ah := admin.New(s.projectStore, adapterInvalidator{s.adapters}, s.logger, knownRegistryTypes(s.cfg))
+		mux.Handle("/admin/", http.StripPrefix("/admin", ah.Handler()))
+	}
 	for _, a := range s.adapters {
 		prefix := strings.TrimRight(a.Prefix(), "/")
 		mux.Handle(prefix+"/", http.StripPrefix(prefix, a.Handler()))
 	}
 	exempt := func(p string) bool { return p == "/healthz" }
 	return TokenAuth(s.cfg.Auth.Token, exempt, s.logger, mux)
+}
+
+// adapterInvalidator fans a project cache invalidation out to every configured
+// registry adapter, so each adapter's project.Resolver drops its cached
+// pipelines for that key.
+type adapterInvalidator struct {
+	adapters []adapter.Adapter
+}
+
+// Invalidate drops the cached Resolved pipelines for key in every adapter.
+func (a adapterInvalidator) Invalidate(key string) {
+	for _, ad := range a.adapters {
+		ad.InvalidateProjectCache(key)
+	}
+}
+
+// knownRegistryTypes returns the configured registry adapter types (e.g.
+// ["npm", "pypi"]) in config order, for the admin API's registry validation.
+func knownRegistryTypes(cfg *config.Config) []string {
+	if cfg == nil {
+		return nil
+	}
+	types := make([]string, 0, len(cfg.Registries))
+	for _, r := range cfg.Registries {
+		types = append(types, r.Type)
+	}
+	return types
 }
 
 // Shutdown drains the dependency tracker (flushing buffered records) and then

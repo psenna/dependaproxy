@@ -16,6 +16,9 @@ type mavenAdapter struct{ prefix string }
 // Prefix returns the URL path prefix.
 func (a *mavenAdapter) Prefix() string { return a.prefix }
 
+// InvalidateProjectCache is a no-op: the maven skeleton has no resolver yet.
+func (a *mavenAdapter) InvalidateProjectCache(string) {}
+
 // Handler serves a 501 placeholder (Maven adapter not yet implemented).
 func (a *mavenAdapter) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
