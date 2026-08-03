@@ -1,0 +1,6 @@
+.git
+.gitignore
+.gocache
+cover.out
+cover.html
+*.test
