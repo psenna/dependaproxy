@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/psenna/dependaproxy/internal/pipeline"
+	"github.com/psenna/dependaproxy/internal/project"
 )
 
 type pRecorder struct {
@@ -59,8 +60,8 @@ func TestPypiMutationHookOrderAndCount(t *testing.T) {
 	rec := &pRecorder{}
 	proj, raw := buildPack(time.Now().AddDate(0, 0, -30), []byte("W"))
 	client := &pRecClient{r: rec, project: proj, raw: raw, file: []byte("W")}
-	a := newTestAdapter(t, "/pypi", dir, 0, client, newMemStore())
-	a.mutation = pipeline.MutationPipeline{Chain: []pipeline.MutationMiddleware{pRecMutation{r: rec}}}
+	global := &project.Resolved{Mutation: pipeline.MutationPipeline{Chain: []pipeline.MutationMiddleware{pRecMutation{r: rec}}}}
+	a := newTestAdapterWithGlobal(t, "/pypi", dir, 0, client, newMemStore(), global)
 	srv := newTestServer(t, a)
 
 	code, _ := fetchViaProxy(t, srv.URL+"/pypi", "testpkg")

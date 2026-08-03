@@ -11,6 +11,7 @@ import (
 	"github.com/psenna/dependaproxy/internal/middleware/validation/cve"
 	"github.com/psenna/dependaproxy/internal/middleware/validation/malware"
 	"github.com/psenna/dependaproxy/internal/pipeline"
+	"github.com/psenna/dependaproxy/internal/project"
 )
 
 func init() { adapter.Register("npm", Factory) }
@@ -53,20 +54,19 @@ func Factory(cfg config.RegistryConfig, deps adapter.Deps) (adapter.Adapter, err
 		mp.Chain = []pipeline.MutationMiddleware{mutation.NoOp{}}
 	}
 
-	var cache evicter
-	if e, ok := retrieval.Head.(evicter); ok {
+	var cache pipeline.Evictor
+	if e, ok := retrieval.Head.(pipeline.Evictor); ok {
 		cache = e
 	}
 
+	global := &project.Resolved{Validation: validation, Retrieval: retrieval, Mutation: mp, Cache: cache}
+	resolver := project.NewResolver(cfg.Type, reg, deps.ProjectStore, global)
 	return &npmAdapter{
-		prefix:     cfg.Prefix,
-		storage:    storage,
-		client:     client,
-		validation: validation,
-		retrieval:  retrieval,
-		mutation:   mp,
-		cache:      cache,
-		logger:     deps.Logger,
-		now:        deps.Now,
+		prefix:   cfg.Prefix,
+		storage:  storage,
+		client:   client,
+		resolver: resolver,
+		logger:   deps.Logger,
+		now:      deps.Now,
 	}, nil
 }
