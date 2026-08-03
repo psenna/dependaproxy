@@ -191,7 +191,7 @@ func TestCachePurgesExpiredOnPut(t *testing.T) {
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	c := newTTLCache(time.Hour, 4, func() time.Time { return now })
 	c.put("k0", []osvVuln{{ID: "CVE-1"}})
-	now = now.Add(2 * time.Hour) // k0 now expired
+	now = now.Add(2 * time.Hour)          // k0 now expired
 	c.put("k1", []osvVuln{{ID: "CVE-2"}}) // triggers a purge
 	if _, ok := c.get("k0"); ok {
 		t.Fatal("expired entry should have been purged on put")
