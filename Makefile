@@ -11,14 +11,22 @@
 
 GOLANG_IMAGE  ?= golang:1.25
 POSTGRES_IMAGE ?= postgres:18
+MINIO_IMAGE   ?= minio/minio
 DOCKER        ?= docker
 
 CURDIR        := $(shell pwd)
 GOCACHE_VOL   := dependaproxy-gocache
+# go stamps VCS info into binaries by default; git refuses repos owned by another
+# uid ("dubious ownership"). Mark /work safe so the container works regardless of
+# who owns the checkout (local uid-1000 checkouts, root CI). The DP_TEST_* vars
+# are forwarded only when set in the caller's environment (unset -> empty in the
+# container -> the postgres/MinIO gated tests skip).
 DOCKER_RUN    := $(DOCKER) run --rm -v "$(CURDIR):/work" -w /work \
 	-v $(GOCACHE_VOL):/gc \
 	-e GOCACHE=/gc/build -e GOMODCACHE=/gc/mod -e GOBIN=/gc/bin \
 	-e PATH=/gc/bin:/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+	-e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0=/work \
+	-e DP_TEST_PG_DSN -e DP_TEST_MINIO_ENDPOINT -e DP_TEST_MINIO_ACCESS_KEY -e DP_TEST_MINIO_SECRET_KEY \
 	$(GOLANG_IMAGE)
 # The race detector needs CGo (it links the race runtime via gcc). The
 # golang:1.25 image ships gcc, so enable CGo only for the race test target.
@@ -30,7 +38,7 @@ DOCKER_RUN_RACE := $(DOCKER_RUN) -e CGO_ENABLED=1
 GOLANGCI_LINT_VERSION := v2.12.2
 GOVULNCHECK_VERSION   := latest
 
-.PHONY: all test vet fmt-check lint vuln tidy run db stop-db clean
+.PHONY: all test vet fmt-check lint vuln tidy run db stop-db minio stop-minio clean
 
 all: vet fmt-check test
 
@@ -75,6 +83,22 @@ db:
 
 stop-db:
 	$(DOCKER) rm -f dependaproxy-pg
+
+# Stand up a MinIO server for the S3-cache integration tests. The tests read
+# DP_TEST_MINIO_ENDPOINT / DP_TEST_MINIO_ACCESS_KEY / DP_TEST_MINIO_SECRET_KEY
+# and skip when the endpoint is unset — point them at this server, e.g.
+#   make minio
+#   DP_TEST_MINIO_ENDPOINT=<minio-ip>:9000 DP_TEST_MINIO_ACCESS_KEY=dependaproxy \
+#     DP_TEST_MINIO_SECRET_KEY=dependaproxy-secret go test ./...
+minio:
+	$(DOCKER) rm -f dependaproxy-minio 2>/dev/null || true
+	$(DOCKER) run -d --name dependaproxy-minio \
+		-e MINIO_ROOT_USER=dependaproxy \
+		-e MINIO_ROOT_PASSWORD=dependaproxy-secret \
+		-p 9000:9000 $(MINIO_IMAGE) server /data --console-address ":9001"
+
+stop-minio:
+	$(DOCKER) rm -f dependaproxy-minio
 
 clean:
 	rm -rf cover.out cover.html
