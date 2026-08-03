@@ -25,6 +25,7 @@ type Server struct {
 	db           *sql.DB
 	adapters     []adapter.Adapter
 	projectStore project.Store
+	depStore     project.DependencyStore
 	tracker      *project.Tracker
 	logger       *slog.Logger
 }
@@ -40,6 +41,7 @@ func New(ctx context.Context, cfg *config.Config, db *sql.DB) (*Server, error) {
 	// dispatch-only tests with fake adapters that never touch storage; the store
 	// and tracker stay nil there.
 	var projectStore project.Store
+	var depStore project.DependencyStore
 	var tracker *project.Tracker
 	if db != nil {
 		ps, err := project.OpenStore(ctx, db)
@@ -49,10 +51,11 @@ func New(ctx context.Context, cfg *config.Config, db *sql.DB) (*Server, error) {
 		projectStore = ps
 		deps.ProjectStore = ps
 
-		depStore, err := project.OpenDependencyStore(ctx, db)
+		ds, err := project.OpenDependencyStore(ctx, db)
 		if err != nil {
 			return nil, fmt.Errorf("open dependency store: %w", err)
 		}
+		depStore = ds
 		tracker = project.NewTracker(depStore, project.TrackerConfig{FlushInterval: 5 * time.Second, BatchSize: 100}, logger)
 		if err := tracker.Start(ctx); err != nil {
 			return nil, fmt.Errorf("start dependency tracker: %w", err)
@@ -66,7 +69,7 @@ func New(ctx context.Context, cfg *config.Config, db *sql.DB) (*Server, error) {
 		}
 		return nil, err
 	}
-	return &Server{cfg: cfg, db: db, adapters: adapters, projectStore: projectStore, tracker: tracker, logger: logger}, nil
+	return &Server{cfg: cfg, db: db, adapters: adapters, projectStore: projectStore, depStore: depStore, tracker: tracker, logger: logger}, nil
 }
 
 // Handler returns the HTTP handler: /healthz (open) + one mount per adapter at
@@ -78,9 +81,10 @@ func (s *Server) Handler() http.Handler {
 		_, _ = w.Write([]byte("ok"))
 	})
 	// The admin API is mounted on the same mux so the shared TokenAuth wrap
-	// below gates it. It is only present when a project store exists (db != nil).
+	// below gates it. It is only present when a project store exists (db != nil);
+	// the dependency store is non-nil exactly then too.
 	if s.projectStore != nil {
-		ah := admin.New(s.projectStore, adapterInvalidator{s.adapters}, s.logger, knownRegistryTypes(s.cfg))
+		ah := admin.New(s.projectStore, s.depStore, adapterInvalidator{s.adapters}, s.logger, knownRegistryTypes(s.cfg))
 		mux.Handle("/admin/", http.StripPrefix("/admin", ah.Handler()))
 	}
 	for _, a := range s.adapters {
