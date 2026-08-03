@@ -6,69 +6,36 @@
 //
 // It is registry-agnostic: ctx.Registry is mapped to the OSV ecosystem
 // ("npm" | "pypi"). Registries with no OSV ecosystem (e.g. maven) are skipped.
+//
+// The OSV client, bounded TTL cache and query/deny-message helpers live in
+// internal/middleware/cveosv and are shared with the retrieval-stage
+// cve-check-retrieval middleware (same endpoint + cache logic).
 package cve
 
 import (
-	"bytes"
-	"context"
-	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
+	"github.com/psenna/dependaproxy/internal/middleware/cveosv"
 	"github.com/psenna/dependaproxy/internal/pipeline"
 	"gopkg.in/yaml.v3"
 )
 
-// Defaults used when the corresponding param is omitted.
+// Backward-compatible defaults kept for existing tests.
 const (
-	defaultEndpoint = "https://api.osv.dev"
-	defaultMode     = modeDeny
-	defaultOnError  = onErrorFailOpen
-	defaultTimeout  = 10 * time.Second
-	defaultCacheTTL = time.Hour
-	defaultCacheMax = 4096
+	defaultTimeout  = cveosv.DefaultTimeout
+	defaultCacheTTL = cveosv.DefaultCacheTTL
 )
-
-// Modes and error policies.
-const (
-	modeDeny = "deny"
-	modeWarn = "warn"
-
-	onErrorFailOpen   = "fail_open"
-	onErrorFailClosed = "fail_closed"
-)
-
-// osvVuln is one vulnerability record in an OSV query response. Only the fields
-// surfaced in deny/warn messages are kept.
-type osvVuln struct {
-	ID      string   `json:"id"`
-	Summary string   `json:"summary"`
-	Aliases []string `json:"aliases"`
-}
-
-type osvQueryRequest struct {
-	Package struct {
-		Ecosystem string `json:"ecosystem"`
-		Name      string `json:"name"`
-	} `json:"package"`
-	Version string `json:"version"`
-}
-
-type osvQueryResponse struct {
-	Vulns []osvVuln `json:"vulns"`
-}
 
 // Middleware is the OSV-backed CVE validation middleware.
 type Middleware struct {
 	endpoint string
 	mode     string // deny (default) | warn
 	onError  string // fail_open (default) | fail_closed
-	client   *http.Client
-	cache    *ttlCache
+	client   *cveosv.Client
+	cache    *cveosv.Cache
 }
 
 // Name returns the config type string.
@@ -77,74 +44,27 @@ func (*Middleware) Name() string { return "cve-check" }
 // Validate queries OSV for ecosystem/name/version. A confirmed match is denied
 // or warned per mode; an OSV API failure follows on_error.
 func (m *Middleware) Validate(ctx *pipeline.PipelineContext) error {
-	eco, ok := osvEcosystem(ctx.Registry)
+	eco, ok := cveosv.Ecosystem(ctx.Registry)
 	if !ok {
 		// Not a registry OSV covers (e.g. maven); nothing to check.
 		return nil
 	}
 
-	key := eco + "|" + ctx.PkgName + "|" + ctx.Version
-	if vulns, hit := m.cache.get(key); hit {
-		return m.apply(ctx, key, vulns)
-	}
-
-	vulns, err := m.query(ctx.Ctx, eco, ctx.PkgName, ctx.Version)
+	vulns, err := m.client.Query(ctx.Ctx, eco, ctx.PkgName, ctx.Version)
 	if err != nil {
 		return m.applyError(ctx, err)
 	}
-	m.cache.put(key, vulns)
-	return m.apply(ctx, key, vulns)
-}
-
-// query calls the OSV /v1/query endpoint for one package version.
-func (m *Middleware) query(ctx context.Context, ecosystem, name, version string) ([]osvVuln, error) {
-	req := osvQueryRequest{Version: version}
-	req.Package.Ecosystem = ecosystem
-	req.Package.Name = name
-	body, err := json.Marshal(req)
-	if err != nil {
-		return nil, fmt.Errorf("cve-check: marshal query: %w", err)
-	}
-
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, m.endpoint+"/v1/query", bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("cve-check: build request: %w", err)
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-
-	resp, err := m.client.Do(httpReq)
-	if err != nil {
-		return nil, fmt.Errorf("cve-check: query %s@%s: %w", name, version, err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
-		return nil, fmt.Errorf("cve-check: OSV returned %s", resp.Status)
-	}
-
-	var parsed osvQueryResponse
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&parsed); err != nil {
-		return nil, fmt.Errorf("cve-check: decode OSV response: %w", err)
-	}
-	if parsed.Vulns == nil {
-		return []osvVuln{}, nil
-	}
-	return parsed.Vulns, nil
+	return m.apply(ctx, vulns)
 }
 
 // apply enforces the configured mode on a (possibly cached) query result.
-func (m *Middleware) apply(ctx *pipeline.PipelineContext, key string, vulns []osvVuln) error {
+func (m *Middleware) apply(ctx *pipeline.PipelineContext, vulns []cveosv.Vuln) error {
 	if len(vulns) == 0 {
 		return nil
 	}
-	ids := make([]string, 0, len(vulns))
-	for _, v := range vulns {
-		ids = append(ids, v.ID)
-	}
-	summary := vulns[0].Summary
+	ids := cveosv.VulnIDs(vulns)
 	switch m.mode {
-	case modeWarn:
+	case cveosv.ModeWarn:
 		if ctx.Log != nil {
 			ctx.Log.Warn("cve-check: package has known vulnerabilities (served in warn mode)",
 				"package", ctx.PkgName, "version", ctx.Version, "vulns", strings.Join(ids, ","))
@@ -152,18 +72,14 @@ func (m *Middleware) apply(ctx *pipeline.PipelineContext, key string, vulns []os
 		ctx.Metadata["cve"] = ids
 		return nil
 	default: // deny
-		msg := fmt.Sprintf("cve-check: %s@%s has known vulnerabilities: %s", ctx.PkgName, ctx.Version, strings.Join(ids, ","))
-		if summary != "" {
-			msg += " (" + summary + ")"
-		}
-		return fmt.Errorf("%s", msg)
+		return fmt.Errorf("cve-check: %s", cveosv.BuildDenyMessage(ctx.PkgName, ctx.Version, vulns))
 	}
 }
 
 // applyError handles an OSV query failure per on_error.
 func (m *Middleware) applyError(ctx *pipeline.PipelineContext, err error) error {
 	switch m.onError {
-	case onErrorFailClosed:
+	case cveosv.OnErrorFailClosed:
 		if ctx.Log != nil {
 			ctx.Log.Error("cve-check: vulnerability source unavailable; rejecting (fail_closed)", "err", err)
 		}
@@ -176,79 +92,15 @@ func (m *Middleware) applyError(ctx *pipeline.PipelineContext, err error) error 
 	}
 }
 
-// osvEcosystem maps a pipeline registry name to an OSV ecosystem.
-func osvEcosystem(registry string) (string, bool) {
-	switch registry {
-	case "npm", "pypi":
-		return registry, true
-	default:
-		return "", false
-	}
-}
+type params = cveosv.Params
 
-// ttlCache is a tiny, concurrency-safe TTL cache for OSV query results. It is
-// bounded by max entries so a long-running proxy can't leak memory across
-// thousands of distinct versions: once full it purges expired entries, and if
-// still full it drops the new entry (the next request simply re-queries OSV).
-type ttlCache struct {
-	mu    sync.Mutex
-	ttl   time.Duration
-	max   int
-	now   func() time.Time
-	items map[string]ttlEntry
-}
-
-type ttlEntry struct {
-	vulns  []osvVuln
-	expiry time.Time
-}
-
-func newTTLCache(ttl time.Duration, max int, now func() time.Time) *ttlCache {
-	return &ttlCache{ttl: ttl, max: max, now: now, items: map[string]ttlEntry{}}
-}
-
-func (c *ttlCache) get(key string) ([]osvVuln, bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	e, ok := c.items[key]
-	if !ok {
-		return nil, false
-	}
-	if c.now().After(e.expiry) {
-		delete(c.items, key)
-		return nil, false
-	}
-	return e.vulns, true
-}
-
-func (c *ttlCache) put(key string, vulns []osvVuln) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if len(c.items) >= c.max {
-		c.purgeExpiredLocked()
-	}
-	if len(c.items) >= c.max {
-		return // full even after purging; skip rather than grow unbounded
-	}
-	c.items[key] = ttlEntry{vulns: vulns, expiry: c.now().Add(c.ttl)}
-}
-
-func (c *ttlCache) purgeExpiredLocked() {
-	now := c.now()
-	for k, e := range c.items {
-		if now.After(e.expiry) {
-			delete(c.items, k)
-		}
-	}
-}
-
-type params struct {
-	Endpoint string        `yaml:"endpoint"`
-	Mode     string        `yaml:"mode"`
-	OnError  string        `yaml:"on_error"`
-	Timeout  time.Duration `yaml:"timeout"`
-	CacheTTL time.Duration `yaml:"cache_ttl"`
-}
+// Backward-compatible aliases so existing tests keep compiling against the
+// shared cveosv types.
+type (
+	osvVuln          = cveosv.Vuln
+	osvQueryRequest  = cveosv.QueryRequest
+	osvQueryResponse = cveosv.QueryResponse
+)
 
 // Factory builds the middleware from its raw params node, registered by each
 // adapter under "cve-check".
@@ -266,37 +118,12 @@ var Factory pipeline.ValidationFactory = func(p yaml.Node) (pipeline.ValidationM
 // deterministic tests. A nil client uses the configured timeout; a nil now uses
 // time.Now().UTC().
 func New(pr params, client *http.Client, now func() time.Time) *Middleware {
-	endpoint := pr.Endpoint
-	if endpoint == "" {
-		endpoint = defaultEndpoint
-	}
-	mode := pr.Mode
-	if mode == "" {
-		mode = defaultMode
-	}
-	onError := pr.OnError
-	if onError == "" {
-		onError = defaultOnError
-	}
-	timeout := pr.Timeout
-	if timeout <= 0 {
-		timeout = defaultTimeout
-	}
-	ttl := pr.CacheTTL
-	if ttl <= 0 {
-		ttl = defaultCacheTTL
-	}
-	if now == nil {
-		now = func() time.Time { return time.Now().UTC() }
-	}
-	if client == nil {
-		client = &http.Client{Timeout: timeout}
-	}
+	c := cveosv.NewClient(cveosv.Params(pr), client, now)
 	return &Middleware{
-		endpoint: endpoint,
-		mode:     mode,
-		onError:  onError,
-		client:   client,
-		cache:    newTTLCache(ttl, defaultCacheMax, now),
+		endpoint: c.Endpoint(),
+		mode:     c.Mode(),
+		onError:  c.OnError(),
+		client:   c,
+		cache:    c.Cache(),
 	}
 }

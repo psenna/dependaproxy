@@ -6,6 +6,7 @@ import (
 	"github.com/psenna/dependaproxy/internal/adapter"
 	"github.com/psenna/dependaproxy/internal/config"
 	"github.com/psenna/dependaproxy/internal/middleware/mutation"
+	"github.com/psenna/dependaproxy/internal/middleware/retrieval/cverecheck"
 	"github.com/psenna/dependaproxy/internal/middleware/retrieval/localcache"
 	"github.com/psenna/dependaproxy/internal/middleware/retrieval/s3cache"
 	"github.com/psenna/dependaproxy/internal/middleware/validation/cve"
@@ -31,6 +32,7 @@ func Factory(cfg config.RegistryConfig, deps adapter.Deps) (adapter.Adapter, err
 	reg.RegisterValidation("min-publication-age", MinPubFactory)
 	reg.RegisterValidation("cve-check", cve.Factory)
 	reg.RegisterValidation("malware-scan", malware.Factory)
+	reg.RegisterRetrieval("cve-check-retrieval", cverecheck.Factory)
 	reg.RegisterRetrieval("local-disk-cache", localcache.Factory)
 	reg.RegisterRetrieval("s3-cache", s3cache.Factory)
 	reg.RegisterRetrieval("upstream-registry", UpstreamFactory(client))

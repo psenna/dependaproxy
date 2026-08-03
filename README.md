@@ -72,6 +72,7 @@ registries:
       - {type: cve-check, params: {mode: deny}}
       - {type: malware-scan, params: {mode: deny}}
     retrieval:
+      - {type: cve-check-retrieval, params: {mode: deny}}  # MUST be first
       - {type: local-disk-cache, params: {path: /cache/npm}}
       - {type: upstream-registry}
   - type: pypi
@@ -82,6 +83,7 @@ registries:
       - {type: cve-check, params: {mode: deny}}
       - {type: malware-scan, params: {mode: deny}}
     retrieval:
+      - {type: cve-check-retrieval, params: {mode: deny}}  # MUST be first
       - {type: local-disk-cache, params: {path: /cache/pypi}}
       - {type: upstream-registry}
 ```
@@ -103,8 +105,28 @@ registries:
 
 > **Validation runs once per artifact.** A package is validated on first fetch
 > and stored with its sha256 trust anchor; later retrievals serve the stored
-> bytes without re-validating. So a CVE published *after* first validation is
-> not re-checked until the artifact is evicted.
+> bytes without re-validating. The `cve-check-retrieval` middleware (below)
+> closes the resulting gap: a CVE published *after* first validation is caught
+> on the next serve even though the stored artifact is not re-validated.
+
+### Retrieval middlewares
+
+- `cve-check-retrieval` — re-checks **OSV.dev** (npm + PyPI) on **every serve**,
+  on both the trusted (storage / cache-hit) and untrusted (fresh fetch) paths.
+  It must be **FIRST in the `retrieval:` list** (outermost) so it runs even when
+  a downstream cache middleware serves the artifact. Params: `endpoint` (default
+  `https://api.osv.dev`), `mode: deny|warn` (default `deny` → 403 via the
+  retrieval-rejected error path, with the CVE IDs in the response body),
+  `on_error: fail_open|fail_closed` (default `fail_open` — an OSV outage serves;
+  `fail_closed` returns a 502, an outage rather than an advisory),
+  `timeout`, `cache_ttl` (one OSV call per `cache_ttl` window per
+  ecosystem/name/version — a bounded TTL cache shared with the validation
+  `cve-check` via the same `internal/middleware/cveosv` client logic).
+  When both the validation `cve-check` and `cve-check-retrieval` are configured,
+  the first untrusted fetch makes **two** OSV calls (one per middleware — they
+  use **separate** caches); subsequent serves make **zero** calls while the TTL
+  caches are warm. In v1 the middleware only denies or warns — eviction of the
+  stored (already-trusted) record on a new advisory is deferred.
 
 ### Cache backends (retrieval)
 
@@ -321,6 +343,7 @@ tests. The build is CGo-free except the race detector.
 - ☑ sha256 trust anchor (per-artifact, constant-time verify, evict+refetch+reverify, 502 on persistent mismatch)
 - ☑ Minimum Publication Age (npm `time`; pypi per-file `upload-time`; fail-closed; injectable clock)
 - ☑ CVE / vulnerability validation (OSV.dev, npm + PyPI; deny/warn; fail-open/closed on source error)
+- ☑ CVE retrieval re-check (`cve-check-retrieval`: OSV re-checked on every serve, trusted + untrusted incl. cache hits, deny/warn, fail-open/closed on source error, bounded TTL cache shared with validation cve-check via `cveosv`) — mitigates the "CVE published after first validation" gap
 - ☑ Malware / heuristic static-analysis validation (npm install scripts + suspicious script contents; pypi setup.py/PKG-INFO patterns + wheel exec files; deny/warn)
 - ☑ Pluggable cache backend (CacheBackend interface: disk + S3/MinIO write-through with real-MinIO integration tests)
 - ☑ Local Disk Cache (write-through, generic per-artifact keying, per-key lock)

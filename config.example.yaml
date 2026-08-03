@@ -41,7 +41,17 @@ registries:
       - type: malware-scan
         params:
           mode: warn
+    # cve-check-retrieval MUST be FIRST in the retrieval list (outermost) so it
+    # runs on EVERY serve — trusted (cache hit) and untrusted — re-checking OSV
+    # for a CVE published after the artifact was first validated. The validation
+    # cve-check above still gates the initial trust decision on the first
+    # untrusted fetch.
     retrieval:
+      - type: cve-check-retrieval
+        params:
+          mode: deny
+          on_error: fail_open
+          cache_ttl: 1h
       - type: local-disk-cache
         params:
           path: /var/lib/dependaproxy/cache/npm
@@ -70,7 +80,17 @@ registries:
       - type: malware-scan
         params:
           mode: warn
+    # cve-check-retrieval MUST be FIRST in the retrieval list (outermost) so it
+    # runs on EVERY serve — trusted (cache hit) and untrusted — re-checking OSV
+    # for a CVE published after the artifact was first validated. The validation
+    # cve-check above still gates the initial trust decision on the first
+    # untrusted fetch.
     retrieval:
+      - type: cve-check-retrieval
+        params:
+          mode: deny
+          on_error: fail_open
+          cache_ttl: 1h
       - type: local-disk-cache
         params:
           path: /var/lib/dependaproxy/cache/pypi
