@@ -49,6 +49,38 @@ serve`. Validation rejection → 403; upstream 404 → 404; upstream error → 5
   trust anchor is per-file. Min-publication-age reads per-file `upload-time`.
 - **maven** (`/maven/`): skeleton (maven-metadata model + 501 placeholder);
   full routing/storage is a future issue.
+- **goproxy** (`/goproxy/`): the **Go module proxy protocol** (GOPROXY). DependaProxy
+  is the **trusted fetcher**: the `.zip` is fetched from the upstream Go module
+  proxy, validated through the configured middleware chain, stored with a
+  per-(module,version) sha256 trust anchor, and re-verified on every serve
+  (mismatch → evict + refetch + reverify, persistent mismatch → 502 never
+  serve). The metadata endpoints (`@v/list`, `.info`, `.mod`, `@latest`) are
+  proxied through verbatim. Min-publication-age reads the `.info` publication
+  `Time`; `cve-check` maps the registry to OSV's **Go** ecosystem. Recommended
+  prefix `/goproxy` + upstream `https://proxy.golang.org`.
+
+### Go modules (client setup)
+
+Point the Go toolchain at DependaProxy instead of the public proxy:
+
+```sh
+GOPROXY=http://<host>:8080/goproxy,direct
+GOSUMDB=off
+```
+
+`GOSUMDB=off` disables the checksum database because it is **redundant**: the
+proxy already validated the module and stored a sha256 trust anchor for the exact
+bytes it serves (re-verified on every request), so a second round-trip to
+`sum.golang.org` would add latency without strengthening the trust decision.
+Per-module overrides are still honored: modules matched by `GOPRIVATE` /
+`GONOSUMDB` (and the legacy `GONOSUMCHECK`) skip the default, so you can scope
+which modules use the trusted-fetcher model.
+
+**Out of scope for v1:** serving the checksum database to clients, per-version
+`@v/<version>.info` redirect handling and the `@v/sum` endpoint, Go
+malware/provenance scanning beyond the shared middleware set, and metadata
+caching (metadata endpoints are proxied through on each request; only the
+validated `.zip` is disk-cached and hash-verified).
 
 ## Configuration
 
@@ -324,6 +356,7 @@ Point your package managers at the proxy:
 ```sh
 npm install --registry http://localhost:8080/npm <pkg>            # npm
 pip download --index-url http://localhost:8080/pypi/simple <pkg>  # pip
+GOPROXY=http://localhost:8080/goproxy,direct GOSUMDB=off go mod download   # go
 ```
 
 With `auth.token` set, configure the credential too (`npm config set
@@ -384,6 +417,7 @@ tests. The build is CGo-free except the race detector.
 - ☑ YAML config (multi-registry: per-registry upstream/middleware; shared storage/auth/log)
 - ☑ Middleware plugin architecture (new middleware = one file + one config entry)
 - ☑ Maven adapter skeleton (types + factory + registration; routes/storage deferred)
+- ☑ Go modules adapter (GOPROXY protocol: `@v/list`, `.info`, `.mod`, `.zip`, `@latest`; escaped module paths; per-(module,version) sha256 trust anchor; min-publication-age on `.info` `Time`; cve-check → OSV "Go" ecosystem; GOSUMDB=off trusted-fetcher model)
 - ☑ Projects: per-project configuration (`/p/<key>` routing, `PipelineContext.ProjectKey`, default-path backward compat)
 - ☑ Projects: project config store (postgres `projects` table) + `ProjectResolver` (cached, per-chain fallback to global, invalidated on admin write)
 - ☑ Projects: async/buffered dependency tracking + emit on serve (per-project SBOM; zero overhead on the default path)
@@ -393,7 +427,7 @@ tests. The build is CGo-free except the race detector.
 
 ### Planned / future
 - ☐ Full Maven adapter (maven-metadata.xml routing, `(groupId,artifactId,version,classifier,type)` store, upstream fetch)
-- ☐ Additional registries (Cargo, NuGet, Go modules) via the adapter contract
+- ☐ Additional registries (Cargo, NuGet) via the adapter contract (Go modules adapter shipped)
 - ☐ AI-assisted validation middleware
 - ☐ Policy engine (allow/deny lists, license, dependency constraints)
 - ☐ Auth / RBAC (token scopes, per-registry/per-package permissions)
