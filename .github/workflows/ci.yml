@@ -74,7 +74,7 @@ jobs:
           # The race detector links the race runtime via gcc (present on the
           # ubuntu runner), so it needs CGo even though the project itself is CGo-free.
           CGO_ENABLED: "1"
-        run: go test -race -coverprofile=cover.out ./...
+        run: go test -race -p 1 -coverprofile=cover.out ./...
 
       - name: coverage summary
         run: go tool cover -func=cover.out
