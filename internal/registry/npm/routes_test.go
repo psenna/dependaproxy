@@ -309,3 +309,170 @@ func (notFoundClient) FetchPackumentRaw(context.Context, string) ([]byte, error)
 func (notFoundClient) FetchTarball(context.Context, string) (io.ReadCloser, int64, error) {
 	return nil, 0, ErrNotFound
 }
+
+// --- project routing (issue #55) ---
+
+// captureClient records the pkg name and the project key carried on the request
+// context at fetch time, then serves canned upstream data.
+type captureClient struct {
+	pack         *Packument
+	raw          []byte
+	tarball      []byte
+	mu           sync.Mutex
+	packumentPkg string
+	packumentKey string
+	tarCalls     int32
+}
+
+func (c *captureClient) FetchPackument(context.Context, string) (*Packument, error) {
+	return c.pack, nil
+}
+func (c *captureClient) FetchPackumentRaw(ctx context.Context, name string) ([]byte, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.packumentPkg = name
+	c.packumentKey = pipeline.ProjectKeyFromContext(ctx)
+	return c.raw, nil
+}
+func (c *captureClient) FetchTarball(context.Context, string) (io.ReadCloser, int64, error) {
+	atomic.AddInt32(&c.tarCalls, 1)
+	return io.NopCloser(bytes.NewReader(c.tarball)), int64(len(c.tarball)), nil
+}
+
+func (c *captureClient) lastPackument() (pkg, key string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.packumentPkg, c.packumentKey
+}
+
+// projKeyRecorder is a mutation middleware that captures the PipelineContext
+// ProjectKey (and PkgName) seen by PreFetch on a tarball flow.
+type projKeyRecorder struct {
+	mu  sync.Mutex
+	key string
+	pkg string
+}
+
+func (*projKeyRecorder) Name() string { return "project-key-recorder" }
+func (r *projKeyRecorder) PreFetch(ctx *pipeline.PipelineContext) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.key = ctx.ProjectKey
+	r.pkg = ctx.PkgName
+	return nil
+}
+func (*projKeyRecorder) PostFetch(*pipeline.PipelineContext) error { return nil }
+
+func (r *projKeyRecorder) captured() (key, pkg string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.key, r.pkg
+}
+
+func TestNpmProjectKeySetOnContext(t *testing.T) {
+	dir := t.TempDir()
+	pack, raw := buildPack(time.Now().AddDate(0, 0, -30), []byte("TARBALL"))
+	c := &captureClient{pack: pack, raw: raw, tarball: []byte("TARBALL")}
+	a := newTestAdapter(t, "/npm", dir, 0, c, newMemStore())
+	srv := newTestServer(t, a)
+
+	resp, err := http.Get(srv.URL + "/npm/p/myproj/testpkg") //nolint:gosec // G107: proxy URL under test
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != 200 {
+		t.Fatalf("code=%d want 200", resp.StatusCode)
+	}
+	_, _ = io.ReadAll(resp.Body)
+
+	pkg, key := c.lastPackument()
+	if pkg != "testpkg" {
+		t.Errorf("packument fetched as %q, want %q (project prefix must be stripped)", pkg, "testpkg")
+	}
+	if key != "myproj" {
+		t.Errorf("project key on request context = %q, want %q", key, "myproj")
+	}
+}
+
+func TestNpmProjectTarballSetsKey(t *testing.T) {
+	dir := t.TempDir()
+	store := newMemStore()
+	pack, raw := buildPack(time.Now().AddDate(0, 0, -30), []byte("TARBALL"))
+	c := &captureClient{pack: pack, raw: raw, tarball: []byte("TARBALL")}
+	a := newTestAdapter(t, "/npm", dir, 0, c, store)
+	rec := &projKeyRecorder{}
+	a.mutation = pipeline.MutationPipeline{Chain: []pipeline.MutationMiddleware{rec}}
+	srv := newTestServer(t, a)
+
+	resp, err := http.Get(srv.URL + "/npm/p/myproj/testpkg/-/1.0.0") //nolint:gosec // G107: proxy URL under test
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != 200 || string(body) != "TARBALL" {
+		t.Fatalf("code=%d body=%q want 200/TARBALL", resp.StatusCode, body)
+	}
+
+	key, pkg := rec.captured()
+	if key != "myproj" {
+		t.Errorf("ctx.ProjectKey = %q, want %q", key, "myproj")
+	}
+	if pkg != "testpkg" {
+		t.Errorf("ctx.PkgName = %q, want %q", pkg, "testpkg")
+	}
+}
+
+func TestNpmPackagePTarballUnchanged(t *testing.T) {
+	dir := t.TempDir()
+	pack, raw := buildPack(time.Now().AddDate(0, 0, -30), []byte("TARBALL"))
+	c := &captureClient{pack: pack, raw: raw, tarball: []byte("TARBALL")}
+	a := newTestAdapter(t, "/npm", dir, 0, c, newMemStore())
+	rec := &projKeyRecorder{}
+	a.mutation = pipeline.MutationPipeline{Chain: []pipeline.MutationMiddleware{rec}}
+	srv := newTestServer(t, a)
+
+	resp, err := http.Get(srv.URL + "/npm/p/-/lodash-1.0.0.tgz") //nolint:gosec // G107: proxy URL under test
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+
+	// The "p/-/" path is the npm registry's own package-"p" tarball namespace;
+	// it must route to handleTarball with pkg "p" and NOT set a project key.
+	key, pkg := rec.captured()
+	if key != "" {
+		t.Errorf("ctx.ProjectKey = %q, want \"\" (dash key must not scope)", key)
+	}
+	if pkg != "p" {
+		t.Errorf("ctx.PkgName = %q, want %q (p/-/ tarball routes to package p)", pkg, "p")
+	}
+}
+
+func TestNpmScopedPackageUnchanged(t *testing.T) {
+	dir := t.TempDir()
+	pack, raw := buildPack(time.Now().AddDate(0, 0, -30), []byte("TARBALL"))
+	c := &captureClient{pack: pack, raw: raw, tarball: []byte("TARBALL")}
+	a := newTestAdapter(t, "/npm", dir, 0, c, newMemStore())
+	srv := newTestServer(t, a)
+
+	resp, err := http.Get(srv.URL + "/npm/@scope/pkg") //nolint:gosec // G107: proxy URL under test
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != 200 {
+		t.Fatalf("code=%d want 200", resp.StatusCode)
+	}
+	_, _ = io.ReadAll(resp.Body)
+
+	pkg, key := c.lastPackument()
+	if pkg != "@scope/pkg" {
+		t.Errorf("packument fetched as %q, want %q", pkg, "@scope/pkg")
+	}
+	if key != "" {
+		t.Errorf("project key on request context = %q, want \"\"", key)
+	}
+}

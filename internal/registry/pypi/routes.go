@@ -42,7 +42,13 @@ func (a *pypiAdapter) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /simple/{name}/", a.handleIndex)
 	mux.HandleFunc("GET /files/{name}/{version}/{filename}", a.handleFile)
-	return mux
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if remaining, key := pipeline.ParseProjectPath(r.URL.Path); key != "" {
+			r = r.WithContext(pipeline.ContextWithProjectKey(r.Context(), key))
+			r.URL.Path = remaining
+		}
+		mux.ServeHTTP(w, r)
+	})
 }
 
 // handleIndex proxies the upstream PEP 691 JSON index, rewriting each file's
@@ -77,6 +83,7 @@ func (a *pypiAdapter) handleFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := pipeline.NewPipelineContext(r.Context(), a.logger, "pypi", pkg, version, filename)
+	ctx.ProjectKey = pipeline.ProjectKeyFromContext(r.Context())
 	if err := a.mutation.RunPreFetch(ctx); err != nil {
 		a.fail(w, r, http.StatusInternalServerError, "mutation prefetch", err)
 		return
