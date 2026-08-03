@@ -23,28 +23,46 @@ type Server struct {
 	cfg      *config.Config
 	db       *sql.DB
 	adapters []adapter.Adapter
+	tracker  *project.Tracker
 	logger   *slog.Logger
 }
 
 // New opens no resources itself; it builds the adapters from cfg using the
-// shared db pool. The caller owns db (or hands it to Close).
+// shared db pool. The caller owns db (or hands it to Close/Shutdown). When db is
+// non-nil it also opens the dependency store and starts the download tracker
+// that adapters share.
 func New(ctx context.Context, cfg *config.Config, db *sql.DB) (*Server, error) {
 	logger := log.New(cfg.Log.Format, cfg.Log.Level)
 	deps := adapter.Deps{DB: db, Logger: logger, Now: func() time.Time { return time.Now().UTC() }}
-	// The project store shares the DB pool. nil db is used by dispatch-only tests
-	// with fake adapters that never touch storage; ProjectStore stays nil there.
+	// The project + dependency stores share the DB pool. nil db is used by
+	// dispatch-only tests with fake adapters that never touch storage; the store
+	// and tracker stay nil there.
+	var tracker *project.Tracker
 	if db != nil {
 		projectStore, err := project.OpenStore(ctx, db)
 		if err != nil {
 			return nil, fmt.Errorf("open project store: %w", err)
 		}
 		deps.ProjectStore = projectStore
+
+		depStore, err := project.OpenDependencyStore(ctx, db)
+		if err != nil {
+			return nil, fmt.Errorf("open dependency store: %w", err)
+		}
+		tracker = project.NewTracker(depStore, project.TrackerConfig{FlushInterval: 5 * time.Second, BatchSize: 100}, logger)
+		if err := tracker.Start(ctx); err != nil {
+			return nil, fmt.Errorf("start dependency tracker: %w", err)
+		}
+		deps.DependencyTracker = tracker
 	}
 	adapters, err := adapter.Build(cfg.Registries, deps)
 	if err != nil {
+		if tracker != nil {
+			_ = tracker.Shutdown(context.Background())
+		}
 		return nil, err
 	}
-	return &Server{cfg: cfg, db: db, adapters: adapters, logger: logger}, nil
+	return &Server{cfg: cfg, db: db, adapters: adapters, tracker: tracker, logger: logger}, nil
 }
 
 // Handler returns the HTTP handler: /healthz (open) + one mount per adapter at
@@ -63,10 +81,22 @@ func (s *Server) Handler() http.Handler {
 	return TokenAuth(s.cfg.Auth.Token, exempt, s.logger, mux)
 }
 
-// Close releases the shared database pool.
-func (s *Server) Close() error {
+// Shutdown drains the dependency tracker (flushing buffered records) and then
+// closes the shared database pool. It is idempotent and safe on the db==nil
+// dispatch-only path, where no tracker was started.
+func (s *Server) Shutdown(ctx context.Context) error {
+	if s.tracker != nil {
+		_ = s.tracker.Shutdown(ctx)
+	}
 	if s.db == nil {
 		return nil
 	}
 	return s.db.Close()
+}
+
+// Close releases the shared database pool, draining the tracker with a
+// background context. Kept for back-compat; prefer Shutdown with a bounded
+// context.
+func (s *Server) Close() error {
+	return s.Shutdown(context.Background())
 }

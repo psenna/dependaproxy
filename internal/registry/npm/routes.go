@@ -22,6 +22,7 @@ type npmAdapter struct {
 	storage  Store
 	client   RegistryClient
 	resolver *project.Resolver
+	tracker  project.DependencyTracker // nil on the dispatch-only/default path
 	logger   *slog.Logger
 	now      func() time.Time
 }
@@ -121,6 +122,7 @@ func (a *npmAdapter) serveTrusted(w http.ResponseWriter, r *http.Request, ctx *p
 		a.fail(w, r, http.StatusInternalServerError, "mutation postfetch", err)
 		return
 	}
+	a.trackDownload(ctx, rec.ValidationHash)
 	a.writeTarball(w, body)
 }
 
@@ -154,7 +156,26 @@ func (a *npmAdapter) serveUntrusted(w http.ResponseWriter, r *http.Request, ctx 
 		a.fail(w, r, http.StatusInternalServerError, "mutation postfetch", err)
 		return
 	}
+	a.trackDownload(ctx, h)
 	a.writeTarball(w, body)
+}
+
+// trackDownload emits a dependency download record for project-scoped requests.
+// The tracker is nil on the dispatch-only path and the ProjectKey=="" short
+// circuit returns before any allocation, so default-path traffic has zero
+// overhead.
+func (a *npmAdapter) trackDownload(ctx *pipeline.PipelineContext, sha256 string) {
+	if a.tracker == nil || ctx.ProjectKey == "" {
+		return
+	}
+	a.tracker.Track(project.DependencyRecord{
+		ProjectKey: ctx.ProjectKey,
+		Registry:   ctx.Registry,
+		Pkg:        ctx.PkgName,
+		Version:    ctx.Version,
+		ArtifactID: ctx.ArtifactID,
+		SHA256:     sha256,
+	})
 }
 
 func (a *npmAdapter) verifyOrEvict(w http.ResponseWriter, r *http.Request, ctx *pipeline.PipelineContext, rp *project.Resolved, expected string, body []byte) ([]byte, bool) {
