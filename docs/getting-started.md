@@ -33,7 +33,10 @@ cp config.example.yaml config.yaml
 > The example already configures the npm + pypi registries with
 > `min-publication-age`, `cve-check`, `malware-scan`, `cve-check-retrieval`,
 > and local-disk caches. `provenance-verify` and `strip-install-scripts` are
-> present but commented out — uncomment to enable.
+> present but commented out — uncomment to enable. The deny list is persisted
+> in Postgres: `deny-list-check` (auto-prepended to every validation chain)
+> denies previously-failed packages with the stored reason, without re-scanning
+> them.
 
 ## 2a. Run from source (development)
 

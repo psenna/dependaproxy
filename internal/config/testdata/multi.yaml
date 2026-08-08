@@ -16,6 +16,11 @@ registries:
       - type: min-publication-age
         params:
           min_days: 7
+    deny_list:
+      enabled: true
+      record_middlewares:
+        - guarddog-scan
+        - cve-check
     retrieval:
       - type: local-disk-cache
         params:

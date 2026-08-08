@@ -122,6 +122,11 @@ registries:
 
 ### Validation middlewares
 
+- `deny-list-check` — consults the persistent deny list of previously-denied
+  (package, version, sha256, project) entries at the start of validation; denies
+  fast with the stored reason (403) without re-running the expensive scanners.
+  Auto-prepended FIRST for every request scope (projectless and project
+  overrides). Strict per-project scoping. Removal via a future admin dashboard.
 - `min-publication-age` — rejects packages published less than `min_days` ago.
 - `cve-check` — queries **OSV.dev** (covers npm + PyPI) for known vulnerabilities
   at validation time. Params: `endpoint` (default `https://api.osv.dev`), `mode:
@@ -403,6 +408,19 @@ tests. The build is CGo-free except the race detector.
   `guarddog-scan` is the authoritative package-aware scanner (GuardDog CLI; its
   rules update by bumping the pinned `guarddog` version in the Dockerfile). All
   configurable to `warn` (serve + log + annotate).
+- **Persistent deny list**: validation failures from `{guarddog-scan,
+  malware-scan, cve-check}` are recorded automatically to a Postgres deny list
+  — one row per (package, version, artifact sha256, project key, reason,
+  middleware, timestamp). Transient scanner/source crashes (`guarddog-scan` /
+  `cve-check` fail-closed outages) are skipped — infrastructure, not a verdict.
+  `deny-list-check` runs FIRST in every validation chain (auto-prepended by the
+  resolver) and denies fast with the stored reason (403) on the next request for
+  the same package+hash+project, without re-running the expensive scanners.
+  Because the artifact sha256 is part of the key, a republished artifact is a
+  new row. Matching is strict per project scope: a denial blocks only the
+  project (or projectless traffic) that triggered it. Config per registry via
+  `deny_list` (`enabled: true|false`, `record_middlewares: [...]` — defaults to
+  the three scanners). Removal is a future admin-dashboard feature.
 - **Tamper-resistant cache**: corrupted/tampered cache entries (disk or S3) are
   caught at hash-verify, evicted, refetched, and re-verified.
 - **Shared static bearer token**, compared in constant time, never logged.

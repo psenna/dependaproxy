@@ -48,12 +48,24 @@ type Log struct {
 
 // RegistryConfig configures one registry adapter.
 type RegistryConfig struct {
-	Type       string       `yaml:"type"`     // adapter type: npm, pypi, maven, ...
-	Prefix     string       `yaml:"prefix"`   // URL path prefix, e.g. "/npm"
-	Upstream   string       `yaml:"upstream"` // upstream registry URL
-	Validation []Middleware `yaml:"validation"`
-	Retrieval  []Middleware `yaml:"retrieval"`
-	Mutation   []Middleware `yaml:"mutation"`
+	Type       string          `yaml:"type"`     // adapter type: npm, pypi, maven, ...
+	Prefix     string          `yaml:"prefix"`   // URL path prefix, e.g. "/npm"
+	Upstream   string          `yaml:"upstream"` // upstream registry URL
+	Validation []Middleware    `yaml:"validation"`
+	Retrieval  []Middleware    `yaml:"retrieval"`
+	Mutation   []Middleware    `yaml:"mutation"`
+	DenyList   *DenyListConfig `yaml:"deny_list"`
+}
+
+// DenyListConfig configures the deny-list recorder for one registry.
+// A nil *DenyListConfig means defaults (recording enabled, default allowlist).
+type DenyListConfig struct {
+	// Enabled defaults to true when the block is present. *bool distinguishes
+	// unset (nil = enabled) from an explicit false.
+	Enabled *bool `yaml:"enabled"`
+	// RecordMiddlewares defaults to [guarddog-scan, malware-scan, cve-check]
+	// when empty.
+	RecordMiddlewares []string `yaml:"record_middlewares"`
 }
 
 // Middleware is one entry in an ordered pipeline. Params is kept as a raw

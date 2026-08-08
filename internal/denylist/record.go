@@ -11,27 +11,25 @@ import (
 	"github.com/psenna/dependaproxy/internal/pipeline"
 )
 
-// recordedMiddlewares are the validation middlewares whose failures are a real
-// deny verdict worth persisting. min-publication-age is time-based and
+// DefaultRecordedMiddlewares are the validation middlewares whose failures are
+// a real deny verdict worth persisting. min-publication-age is time-based and
 // self-resolves, so it is deliberately excluded; unknown middlewares are
 // excluded too.
-func recordedMiddleware(mw string) bool {
-	switch mw {
-	case "guarddog-scan", "malware-scan", "cve-check":
-		return true
-	default:
-		return false
-	}
-}
+var DefaultRecordedMiddlewares = []string{"guarddog-scan", "malware-scan", "cve-check"}
 
 // Recorder returns an OnFailure hook that persists a denial. Best-effort:
 // it can never change the deny decision.
 //
-// It records only real verdicts from {guarddog-scan, malware-scan, cve-check},
-// skipping time-based rejections (min-publication-age) and transient
-// fail_closed scanner/source failures (guarddog.ErrScannerUnavailable,
-// cve.ErrSourceUnavailable). A record failure is warn-logged and swallowed.
-func Recorder(s Store, now func() time.Time) func(*pipeline.PipelineContext, error) {
+// It records only real verdicts from the allowlist (defaulting to
+// DefaultRecordedMiddlewares when no allowlist is given), skipping time-based
+// rejections (min-publication-age) and transient fail_closed scanner/source
+// failures (guarddog.ErrScannerUnavailable, cve.ErrSourceUnavailable). A
+// record failure is warn-logged and swallowed.
+func Recorder(s Store, now func() time.Time, allowlist ...string) func(*pipeline.PipelineContext, error) {
+	recorded := allowlist
+	if len(recorded) == 0 {
+		recorded = DefaultRecordedMiddlewares
+	}
 	return func(ctx *pipeline.PipelineContext, err error) {
 		if ctx == nil {
 			return
@@ -44,7 +42,7 @@ func Recorder(s Store, now func() time.Time) func(*pipeline.PipelineContext, err
 		if !errors.As(err, &ve) {
 			return
 		}
-		if !recordedMiddleware(ve.Middleware) {
+		if !allowlisted(recorded, ve.Middleware) {
 			return
 		}
 		// A fail_closed scanner crash is infrastructure, not a verdict: skip.
@@ -74,4 +72,14 @@ func Recorder(s Store, now func() time.Time) func(*pipeline.PipelineContext, err
 			}
 		}
 	}
+}
+
+// allowlisted reports whether mw is a member of the recorded allowlist.
+func allowlisted(recorded []string, mw string) bool {
+	for _, r := range recorded {
+		if r == mw {
+			return true
+		}
+	}
+	return false
 }
