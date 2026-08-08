@@ -48,11 +48,15 @@ const (
 	onErrFailClosed = "fail_closed"
 )
 
-// Finding is one GuardDog rule hit in the JSON scan report.
+// Finding is one GuardDog rule hit in the JSON scan report. GuardDog emits
+// findings under results[<rule>] with location/code/match/message; RuleName is
+// not in the JSON — it is the results map key, populated by parse.
 type Finding struct {
-	RuleName    string `json:"rule_name"`
-	Description string `json:"description"`
-	Severity    string `json:"severity"`
+	RuleName string `json:"-"`
+	Location string `json:"location"`
+	Code     string `json:"code"`
+	Match    string `json:"match"`
+	Message  string `json:"message"`
 }
 
 // Runner scans one artifact. It is an interface so tests can inject a fake and
@@ -293,18 +297,33 @@ func extFor(eco, artifactName string) string {
 	}
 }
 
-// report is the GuardDog JSON scan output. GuardDog emits findings under
-// results[].issues (per-package results) and/or a top-level issues array.
+// report is the GuardDog JSON scan output (guarddog 3.x, --output-format=json):
+//
+//	{
+//	  "package": "<path>",
+//	  "results": { "<rule>": [ {location, code, match, message}, ... ] | {} },
+//	  "errors":  { "<step>": "<message>" },
+//	  "issues":  <int count>,
+//	  "risk_score": {...}, "risks": [...]
+//	}
+//
+// results is a map of rule name to findings (a rule with no hits is an empty
+// object, so each value is kept as raw JSON and decoded per-rule); errors is
+// non-empty when the scan itself failed (e.g. a download error); issues is a
+// count, not an array.
 type report struct {
-	Results []struct {
-		Issues []Finding `json:"issues"`
-	} `json:"results"`
-	Issues []Finding `json:"issues"`
+	Results map[string]json.RawMessage `json:"results"`
+	Errors  map[string]string          `json:"errors"`
+	Issues  int                        `json:"issues"`
 }
 
-// parse decodes the GuardDog JSON report. On a parse failure the scan is
-// treated as an error only when the process itself failed (runErr) or wrote to
-// stderr; a clean exit with unparsable stdout yields no findings (nil, nil).
+// parse decodes the GuardDog JSON report. Findings are collected from every
+// results[<rule>] entry (RuleName set from the map key); a rule with no hits
+// (an empty object, which cannot unmarshal into a slice) is skipped. A
+// non-empty errors map means the scan failed and is surfaced as an error so
+// on_error governs. On a parse failure the scan is treated as an error only
+// when the process itself failed (runErr) or wrote to stderr; a clean exit
+// with unparsable stdout yields no findings.
 func (r *execRunner) parse(stdout []byte, runErr error, stderr string) ([]Finding, error) {
 	var rep report
 	if err := json.Unmarshal(stdout, &rep); err != nil {
@@ -313,10 +332,28 @@ func (r *execRunner) parse(stdout []byte, runErr error, stderr string) ([]Findin
 		}
 		return nil, nil
 	}
-	var findings []Finding
-	for _, res := range rep.Results {
-		findings = append(findings, res.Issues...)
+	if len(rep.Errors) > 0 {
+		return nil, fmt.Errorf("guarddog-scan: scan reported errors: %s", summarizeErrors(rep.Errors))
 	}
-	findings = append(findings, rep.Issues...)
+	var findings []Finding
+	for rule, raw := range rep.Results {
+		var hits []Finding
+		if err := json.Unmarshal(raw, &hits); err != nil {
+			continue // e.g. {} — a rule with no hits
+		}
+		for _, f := range hits {
+			f.RuleName = rule
+			findings = append(findings, f)
+		}
+	}
 	return findings, nil
+}
+
+// summarizeErrors joins the GuardDog errors map for the error message.
+func summarizeErrors(errs map[string]string) string {
+	parts := make([]string, 0, len(errs))
+	for step, msg := range errs {
+		parts = append(parts, step+": "+msg)
+	}
+	return strings.Join(parts, "; ")
 }

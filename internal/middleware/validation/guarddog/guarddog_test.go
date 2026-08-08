@@ -330,32 +330,36 @@ func TestExecRunnerSandboxOnOmitsFlag(t *testing.T) {
 	}
 }
 
-func TestExecRunnerJsonParseResultsShape(t *testing.T) {
-	bin := stubBinary(t, `{"results":[{"issues":[{"rule_name":"R1","description":"d","severity":"high"}]}]}`, "", 0)
+func TestExecRunnerJsonParseResultsMap(t *testing.T) {
+	bin := stubBinary(t, `{"results":{"R1":[{"location":"pkg/package.json:1","code":"c","match":"m","message":"has_npm_hook rule matched"}]},"errors":{},"issues":1}`, "", 0)
 	r := New(Params{Binary: bin}, nil).runner.(*execRunner)
 	findings, err := r.Scan(context.Background(), "npm", "", []byte("x"))
 	if err != nil {
 		t.Fatalf("scan should succeed: %v", err)
 	}
-	if len(findings) != 1 || findings[0].RuleName != "R1" {
-		t.Fatalf("expected 1 finding R1, got %#v", findings)
+	if len(findings) != 1 {
+		t.Fatalf("expected 1 finding, got %#v", findings)
+	}
+	if findings[0].RuleName != "R1" || findings[0].Location != "pkg/package.json:1" || findings[0].Message != "has_npm_hook rule matched" {
+		t.Fatalf("finding should carry the rule name (from the map key) and real fields, got %#v", findings[0])
 	}
 }
 
-func TestExecRunnerJsonParseTopLevelIssues(t *testing.T) {
-	bin := stubBinary(t, `{"issues":[{"rule_name":"R2"}]}`, "", 0)
+func TestExecRunnerJsonParseEmptyRuleSkipped(t *testing.T) {
+	// A rule with no hits is an empty object {} and must contribute nothing.
+	bin := stubBinary(t, `{"results":{"R1":{},"R2":[{"location":"x","code":"c","match":"m","message":"msg"}]},"errors":{},"issues":1}`, "", 0)
 	r := New(Params{Binary: bin}, nil).runner.(*execRunner)
 	findings, err := r.Scan(context.Background(), "npm", "", []byte("x"))
 	if err != nil {
 		t.Fatalf("scan should succeed: %v", err)
 	}
 	if len(findings) != 1 || findings[0].RuleName != "R2" {
-		t.Fatalf("expected 1 finding R2, got %#v", findings)
+		t.Fatalf("expected only the R2 finding, got %#v", findings)
 	}
 }
 
-func TestExecRunnerBothShapesCollected(t *testing.T) {
-	bin := stubBinary(t, `{"results":[{"issues":[{"rule_name":"R1"}]}],"issues":[{"rule_name":"R2"}]}`, "", 0)
+func TestExecRunnerJsonParseMultipleRulesCollected(t *testing.T) {
+	bin := stubBinary(t, `{"results":{"R1":[{"location":"a","code":"c","match":"m","message":"m1"}],"R2":[{"location":"b","code":"c","match":"m","message":"m2"}]},"errors":{},"issues":2}`, "", 0)
 	r := New(Params{Binary: bin}, nil).runner.(*execRunner)
 	findings, err := r.Scan(context.Background(), "npm", "", []byte("x"))
 	if err != nil {
@@ -363,6 +367,28 @@ func TestExecRunnerBothShapesCollected(t *testing.T) {
 	}
 	if len(findings) != 2 {
 		t.Fatalf("expected 2 findings, got %#v", findings)
+	}
+	names := map[string]bool{}
+	for _, f := range findings {
+		names[f.RuleName] = true
+	}
+	if !names["R1"] || !names["R2"] {
+		t.Fatalf("expected findings from both rules, got %#v", findings)
+	}
+}
+
+func TestExecRunnerJsonParseErrorsSurfaced(t *testing.T) {
+	// A non-empty errors map means the scan failed (e.g. a download error); it
+	// must surface as an error so on_error governs (fail_open serves, fail_closed
+	// rejects).
+	bin := stubBinary(t, `{"results":{},"errors":{"download-package":"Received status code: 404 from npm"},"issues":0}`, "", 0)
+	r := New(Params{Binary: bin}, nil).runner.(*execRunner)
+	_, err := r.Scan(context.Background(), "npm", "", []byte("x"))
+	if err == nil {
+		t.Fatal("expected an error when the scan reports errors")
+	}
+	if !strings.Contains(err.Error(), "download-package") || !strings.Contains(err.Error(), "404") {
+		t.Fatalf("error should include the guarddog errors, got: %v", err)
 	}
 }
 
