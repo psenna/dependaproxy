@@ -134,6 +134,17 @@ registries:
   eval/child_process/external URLs); pypi sdist `setup.py`/`setup.cfg`/`PKG-INFO`
   patterns (exec/eval/base64/os.system/subprocess/socket/curl/wget) and wheels
   with `setup.py` or executable files. Params: `mode: deny|warn` (default `deny`).
+- `guarddog-scan` — the real, package-aware malware scanner: shells out to the
+  **GuardDog** CLI (DataDog, Apache-2.0) to scan the fetched artifact bytes for
+  malicious behavior (npm install scripts, PyPI `setup.py`/wheel exec files,
+  obfuscation, exfiltration, etc.). Runs after the fast `malware-scan` heuristic
+  so cheap blocks short-circuit. Params: `mode: deny|warn` (default `deny` →
+  403), `on_error: fail_open|fail_closed` (default `fail_open` — a scanner
+  outage serves), `timeout` (per-scan budget, default 60s), `sandbox: true|
+  false` (default `true`; set `false` if the kernel sandbox — Landlock — is
+  blocked in the container), `binary` (default `guarddog`). **Malware rules
+  update by bumping the pinned `guarddog` version in the Dockerfile** and
+  rebuilding — no code change needed.
 - `provenance-verify` — verifies the upstream registry's package provenance:
   **npm sigstore** attestations advertised in the packument
   (`dist.attestations.url` — the SLSA provenance bundle minted by the GitHub
@@ -388,8 +399,10 @@ tests. The build is CGo-free except the race detector.
   unavailable; upstream sha256 mismatches are rejected (defense-in-depth).
 - **Vulnerability + malware gates (optional)**: `cve-check` blocks versions with
   known OSV advisories (fail-open on a source outage unless `on_error:
-  fail_closed`); `malware-scan` blocks packages whose contents trip static
-  heuristics. Both configurable to `warn` (serve + log + annotate).
+  fail_closed`); `malware-scan` is a fast static-heuristic pre-filter, and
+  `guarddog-scan` is the authoritative package-aware scanner (GuardDog CLI; its
+  rules update by bumping the pinned `guarddog` version in the Dockerfile). All
+  configurable to `warn` (serve + log + annotate).
 - **Tamper-resistant cache**: corrupted/tampered cache entries (disk or S3) are
   caught at hash-verify, evicted, refetched, and re-verified.
 - **Shared static bearer token**, compared in constant time, never logged.

@@ -73,6 +73,14 @@ registries:
   (`preinstall`/`install`/`postinstall`) + suspicious script contents; pypi sdist
   `setup.py`/`setup.cfg`/`PKG-INFO` patterns and wheels with `setup.py` or
   executable files. Params: `mode: deny|warn` (default `deny`).
+- `guarddog-scan` — the real, package-aware malware scanner: shells out to the
+  **GuardDog** CLI to scan the fetched artifact bytes (npm install scripts, PyPI
+  `setup.py`/wheel exec files, obfuscation, exfiltration). Runs after the fast
+  `malware-scan` heuristic. Params: `mode: deny|warn` (default `deny`),
+  `on_error: fail_open|fail_closed` (default `fail_open`), `timeout` (default
+  60s), `sandbox: true|false` (default `true`; set `false` if Landlock is
+  blocked in the container), `binary` (default `guarddog`). Malware rules update
+  by bumping the pinned `guarddog` version in the Dockerfile.
 - `provenance-verify` — verifies upstream provenance: **npm sigstore**
   attestations (`dist.attestations.url`) and **pypi PEP 740** attestations.
   Params: `mode: deny|warn` (default `deny`), `require_provenance: false|true`

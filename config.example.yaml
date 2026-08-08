@@ -41,6 +41,16 @@ registries:
       - type: malware-scan
         params:
           mode: warn
+      # Real malware scanner (GuardDog CLI). Runs after the fast malware-scan
+      # heuristic. mode: deny (default, 403) | warn (serve + log). on_error:
+      # fail_open (default) | fail_closed. timeout: scan budget (default 60s).
+      # sandbox: true (default) | false (set false if Landlock is blocked in the
+      # container). Rules update by bumping the guarddog pin in the Dockerfile.
+      - type: guarddog-scan
+        params:
+          mode: deny
+          on_error: fail_open
+          timeout: 60s
       # Verify sigstore provenance: npm publishes the SLSA provenance
       # attestation bundle advertised in the packument (dist.attestations.url).
       # mode: deny (default, 403) | warn (serve + annotate). require_provenance:
@@ -94,6 +104,12 @@ registries:
       - type: malware-scan
         params:
           mode: warn
+      # Real malware scanner (GuardDog CLI). Params as in the npm block above.
+      - type: guarddog-scan
+        params:
+          mode: deny
+          on_error: fail_open
+          timeout: 60s
       # Verify PEP 740 attestations (sigstore bundles) served at the simple-API
       # /<project>/<version>/attestations/ endpoint. Params as in the npm block
       # above.
