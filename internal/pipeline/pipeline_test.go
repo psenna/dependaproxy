@@ -124,6 +124,125 @@ func TestValidationEmptyNoop(t *testing.T) {
 	}
 }
 
+func TestValidationOnFailureCalledOnce(t *testing.T) {
+	var calls []string
+	var hookErr error
+	hookCalls := 0
+	r := NewRegistry()
+	r.RegisterValidation("v1", valFactory("v1", &calls, nil))
+	r.RegisterValidation("v2", valFactory("v2", &calls, errors.New("rejected")))
+	r.RegisterValidation("v3", valFactory("v3", &calls, nil))
+
+	p, err := r.BuildValidation(mws("v1", "v2", "v3"))
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	p.OnFailure = func(_ *PipelineContext, err error) {
+		hookCalls++
+		hookErr = err
+	}
+	err = p.Run(NewPipelineContext(context.Background(), nil, "npm", "pkg", "1.0.0", ""))
+	if err == nil {
+		t.Fatal("want error")
+	}
+	if hookCalls != 1 {
+		t.Fatalf("OnFailure called %d times, want exactly 1", hookCalls)
+	}
+	if hookErr == nil || hookErr.Error() != `validation "v2": rejected` {
+		t.Errorf("OnFailure err = %v, want %q", hookErr, `validation "v2": rejected`)
+	}
+	var ve *ValidationError
+	if !errors.As(hookErr, &ve) || ve.Middleware != "v2" {
+		t.Errorf("OnFailure err middleware = %v, want v2", ve)
+	}
+}
+
+func TestValidationOnFailureNotCalledOnPass(t *testing.T) {
+	var calls []string
+	hookCalls := 0
+	r := NewRegistry()
+	r.RegisterValidation("v1", valFactory("v1", &calls, nil))
+	r.RegisterValidation("v2", valFactory("v2", &calls, nil))
+
+	p, err := r.BuildValidation(mws("v1", "v2"))
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	p.OnFailure = func(*PipelineContext, error) { hookCalls++ }
+	if err := p.Run(NewPipelineContext(context.Background(), nil, "npm", "pkg", "1.0.0", "")); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if hookCalls != 0 {
+		t.Errorf("OnFailure called %d times, want 0 (all middlewares passed)", hookCalls)
+	}
+}
+
+func TestValidationErrorErrorsAs(t *testing.T) {
+	var calls []string
+	r := NewRegistry()
+	r.RegisterValidation("v1", valFactory("v1", &calls, nil))
+	r.RegisterValidation("v2", valFactory("v2", &calls, errors.New("rejected")))
+
+	p, err := r.BuildValidation(mws("v1", "v2"))
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	err = p.Run(NewPipelineContext(context.Background(), nil, "npm", "pkg", "1.0.0", ""))
+	if err == nil {
+		t.Fatal("want error")
+	}
+	var ve *ValidationError
+	if !errors.As(err, &ve) {
+		t.Fatalf("errors.As: err = %v is not a *ValidationError", err)
+	}
+	if ve.Middleware != "v2" {
+		t.Errorf("ve.Middleware = %q, want %q", ve.Middleware, "v2")
+	}
+	if ve.Err == nil || ve.Err.Error() != "rejected" {
+		t.Errorf("ve.Err = %v, want rejected", ve.Err)
+	}
+}
+
+func TestValidationErrorUnwrapChains(t *testing.T) {
+	wantErr := errors.New("rejected")
+	var calls []string
+	r := NewRegistry()
+	r.RegisterValidation("v2", valFactory("v2", &calls, wantErr))
+
+	p, err := r.BuildValidation(mws("v2"))
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	err = p.Run(NewPipelineContext(context.Background(), nil, "npm", "pkg", "1.0.0", ""))
+	if err == nil {
+		t.Fatal("want error")
+	}
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("errors.Is(err, original) = false, err = %v", err)
+	}
+}
+
+func TestValidationOnFailureNil(t *testing.T) {
+	var calls []string
+	r := NewRegistry()
+	r.RegisterValidation("v1", valFactory("v1", &calls, nil))
+	r.RegisterValidation("v2", valFactory("v2", &calls, errors.New("rejected")))
+	r.RegisterValidation("v3", valFactory("v3", &calls, nil))
+
+	p, err := r.BuildValidation(mws("v1", "v2", "v3"))
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	// OnFailure left nil: behavior must be identical to before this feature.
+	err = p.Run(NewPipelineContext(context.Background(), nil, "npm", "pkg", "1.0.0", ""))
+	if err == nil || err.Error() != `validation "v2": rejected` {
+		t.Fatalf("err = %v", err)
+	}
+	if len(calls) != 2 || calls[0] != "v1" || calls[1] != "v2" {
+		t.Errorf("calls = %v, want [v1 v2] (v3 short-circuited)", calls)
+	}
+}
+
 func TestBuildValidationUnknownType(t *testing.T) {
 	r := NewRegistry()
 	_, err := r.BuildValidation(mws("does-not-exist"))
