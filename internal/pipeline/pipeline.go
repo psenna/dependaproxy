@@ -33,6 +33,19 @@ type ValidationMiddleware interface {
 // ValidationFactory builds a ValidationMiddleware from its raw params node.
 type ValidationFactory func(params yaml.Node) (ValidationMiddleware, error)
 
+// ValidationError reports a validation failure from a specific middleware. It is
+// returned by ValidationPipeline.Run at the exact site where validation fails so
+// consumers can read the failing middleware's name without string-parsing.
+type ValidationError struct {
+	Middleware string
+	Err        error
+}
+
+func (e *ValidationError) Error() string {
+	return fmt.Sprintf("validation %q: %s", e.Middleware, e.Err)
+}
+func (e *ValidationError) Unwrap() error { return e.Err }
+
 // --- Retrieval (decorator chain) ---
 
 // RetrievalMiddleware resolves a package. Contract:
@@ -101,13 +114,24 @@ func (r *Registry) RegisterMutation(name string, f MutationFactory) {
 
 // ValidationPipeline runs an ordered chain; the first error aborts. An empty
 // chain is a no-op pass.
-type ValidationPipeline struct{ Chain []ValidationMiddleware }
+type ValidationPipeline struct {
+	Chain []ValidationMiddleware
+	// OnFailure, when non-nil, is invoked exactly once on the first failing
+	// middleware with the wrapped ValidationError. It is best-effort: a failure
+	// (or panic) inside the hook must never change the deny decision, so its
+	// return value is ignored.
+	OnFailure func(ctx *PipelineContext, err error)
+}
 
 // Run executes the validation chain in order.
 func (p ValidationPipeline) Run(ctx *PipelineContext) error {
 	for _, m := range p.Chain {
 		if err := m.Validate(ctx); err != nil {
-			return fmt.Errorf("validation %q: %w", m.Name(), err)
+			wrapped := &ValidationError{Middleware: m.Name(), Err: err}
+			if p.OnFailure != nil {
+				p.OnFailure(ctx, wrapped)
+			}
+			return wrapped
 		}
 	}
 	return nil
