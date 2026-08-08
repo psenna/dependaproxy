@@ -70,32 +70,46 @@ func TestMinioBackendRoundTrip(t *testing.T) {
 	backend := newIntegrationBackend(t, "")
 	key := "npm/express/4.18.0.bin"
 
-	if err := backend.Put(key, []byte("TARBALL")); err != nil {
+	if err := backend.Put(context.Background(), key, []byte("TARBALL")); err != nil {
 		t.Fatalf("put: %v", err)
 	}
-	got, err := backend.Get(key)
+	got, err := backend.Get(context.Background(), key)
 	if err != nil || string(got) != "TARBALL" {
 		t.Fatalf("get: got %q err %v", got, err)
 	}
-	if _, err := backend.Get("npm/missing/1.0.0.bin"); !errors.Is(err, os.ErrNotExist) {
+	if _, err := backend.Get(context.Background(), "npm/missing/1.0.0.bin"); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("missing key should be os.ErrNotExist, got %v", err)
 	}
-	if err := backend.Delete(key); err != nil {
+	if err := backend.Delete(context.Background(), key); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
-	if _, err := backend.Get(key); !errors.Is(err, os.ErrNotExist) {
+	if _, err := backend.Get(context.Background(), key); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("after delete the key should be gone, got %v", err)
 	}
 }
 
 func TestMinioBackendBasePath(t *testing.T) {
 	backend := newIntegrationBackend(t, "dp-cache")
-	if err := backend.Put("npm/express/4.18.0.bin", []byte("T")); err != nil {
+	if err := backend.Put(context.Background(), "npm/express/4.18.0.bin", []byte("T")); err != nil {
 		t.Fatalf("put: %v", err)
 	}
-	got, err := backend.Get("npm/express/4.18.0.bin")
+	got, err := backend.Get(context.Background(), "npm/express/4.18.0.bin")
 	if err != nil || string(got) != "T" {
 		t.Fatalf("get via base path: got %q err %v", got, err)
+	}
+}
+
+func TestMinioBackendGetRespectsCancelledContext(t *testing.T) {
+	backend := newIntegrationBackend(t, "")
+	key := "npm/express/4.18.0.bin"
+	if err := backend.Put(context.Background(), key, []byte("TARBALL")); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := backend.Get(ctx, key); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Get with cancelled ctx: err = %v want context.Canceled", err)
 	}
 }
 
@@ -124,7 +138,7 @@ func TestMinioMiddlewareWriteThroughAndHit(t *testing.T) {
 	if err := m2.Evict(c2); err != nil {
 		t.Fatalf("evict: %v", err)
 	}
-	if _, err := backend.Get("npm/express/4.18.0.bin"); !errors.Is(err, os.ErrNotExist) {
+	if _, err := backend.Get(context.Background(), "npm/express/4.18.0.bin"); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("evict should remove the object, got %v", err)
 	}
 }

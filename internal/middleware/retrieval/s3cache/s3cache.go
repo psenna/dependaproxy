@@ -73,8 +73,11 @@ func (b *Backend) objectKey(key string) string {
 }
 
 // Get fetches the object bytes; a missing object is reported as os.ErrNotExist.
-func (b *Backend) Get(key string) ([]byte, error) {
-	obj, err := b.client.GetObject(context.Background(), b.bucket, b.objectKey(key), minio.GetObjectOptions{})
+func (b *Backend) Get(ctx context.Context, key string) ([]byte, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	obj, err := b.client.GetObject(ctx, b.bucket, b.objectKey(key), minio.GetObjectOptions{})
 	if err != nil {
 		return nil, err
 	}
@@ -91,16 +94,22 @@ func (b *Backend) Get(key string) ([]byte, error) {
 }
 
 // Put stores the object bytes.
-func (b *Backend) Put(key string, data []byte) error {
-	_, err := b.client.PutObject(context.Background(), b.bucket, b.objectKey(key),
+func (b *Backend) Put(ctx context.Context, key string, data []byte) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	_, err := b.client.PutObject(ctx, b.bucket, b.objectKey(key),
 		bytes.NewReader(data), int64(len(data)),
 		minio.PutObjectOptions{ContentType: "application/octet-stream"})
 	return err
 }
 
 // Delete removes the object; a missing object is not an error.
-func (b *Backend) Delete(key string) error {
-	err := b.client.RemoveObject(context.Background(), b.bucket, b.objectKey(key), minio.RemoveObjectOptions{})
+func (b *Backend) Delete(ctx context.Context, key string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	err := b.client.RemoveObject(ctx, b.bucket, b.objectKey(key), minio.RemoveObjectOptions{})
 	if err != nil {
 		var er minio.ErrorResponse
 		if errors.As(err, &er) && er.Code == "NoSuchKey" {
