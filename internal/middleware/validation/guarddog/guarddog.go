@@ -19,6 +19,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -30,6 +31,12 @@ import (
 	"github.com/psenna/dependaproxy/internal/pipeline"
 	"gopkg.in/yaml.v3"
 )
+
+// ErrScannerUnavailable marks a transient GuardDog invocation failure (a
+// missing/broken binary, a crash, a timeout) as opposed to a real deny verdict.
+// errors.Is on this sentinel lets downstream stages (e.g. the deny-list
+// recorder) skip recording infrastructure failures.
+var ErrScannerUnavailable = errors.New("guarddog scanner unavailable")
 
 // Defaults used when the corresponding param is omitted.
 const (
@@ -185,7 +192,7 @@ func (m *Middleware) applyError(ctx *pipeline.PipelineContext, err error) error 
 		if ctx.Log != nil {
 			ctx.Log.Error("guarddog-scan: scanner unavailable; rejecting (fail_closed)", "err", err)
 		}
-		return fmt.Errorf("guarddog-scan: %w", err)
+		return fmt.Errorf("guarddog-scan: %w", errors.Join(ErrScannerUnavailable, err))
 	default: // fail_open
 		if ctx.Log != nil {
 			ctx.Log.Warn("guarddog-scan: scanner unavailable; serving (fail_open)", "err", err)

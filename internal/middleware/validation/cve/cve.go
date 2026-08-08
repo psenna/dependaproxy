@@ -13,6 +13,7 @@
 package cve
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -22,6 +23,12 @@ import (
 	"github.com/psenna/dependaproxy/internal/pipeline"
 	"gopkg.in/yaml.v3"
 )
+
+// ErrSourceUnavailable marks a transient OSV source failure (endpoint down,
+// network error, timeout) as opposed to a real vulnerability verdict. errors.Is
+// on this sentinel lets downstream stages (e.g. the deny-list recorder) skip
+// recording infrastructure failures.
+var ErrSourceUnavailable = errors.New("cve source unavailable")
 
 // Backward-compatible defaults kept for existing tests.
 const (
@@ -83,7 +90,7 @@ func (m *Middleware) applyError(ctx *pipeline.PipelineContext, err error) error 
 		if ctx.Log != nil {
 			ctx.Log.Error("cve-check: vulnerability source unavailable; rejecting (fail_closed)", "err", err)
 		}
-		return fmt.Errorf("cve-check: %w", err)
+		return fmt.Errorf("cve-check: %w", errors.Join(ErrSourceUnavailable, err))
 	default: // fail_open
 		if ctx.Log != nil {
 			ctx.Log.Warn("cve-check: vulnerability source unavailable; serving (fail_open)", "err", err)
