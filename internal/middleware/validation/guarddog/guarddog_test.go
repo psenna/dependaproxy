@@ -283,14 +283,15 @@ func TestExecRunnerArgConstruction(t *testing.T) {
 	if len(args) != 5 {
 		t.Fatalf("expected 5 args, got %v", args)
 	}
-	if args[0] != "npm" || args[1] != "scan" || args[3] != "--output-format=json" || args[4] != "--log-level=error" {
+	// --log-level is a GuardDog global option and must precede the subcommand.
+	if args[0] != "--log-level=error" || args[1] != "npm" || args[2] != "scan" || args[4] != "--output-format=json" {
 		t.Fatalf("unexpected args: %v", args)
 	}
-	if !filepath.IsAbs(args[2]) {
-		t.Fatalf("artifact path should be absolute, got %q", args[2])
+	if !filepath.IsAbs(args[3]) {
+		t.Fatalf("artifact path should be absolute, got %q", args[3])
 	}
-	if !strings.HasSuffix(args[2], ".tgz") {
-		t.Fatalf("npm artifact should end in .tgz, got %q", args[2])
+	if !strings.HasSuffix(args[3], ".tgz") {
+		t.Fatalf("npm artifact should end in .tgz, got %q", args[3])
 	}
 }
 

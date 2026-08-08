@@ -216,8 +216,11 @@ type execRunner struct {
 	sandbox bool
 }
 
-// Scan writes artifact to a temp file and runs `guarddog <eco> scan <file>
-// --output-format=json`. The JSON report is parsed into findings.
+// Scan writes artifact to a temp file and runs
+// `guarddog --log-level=error <eco> scan <file> --output-format=json`. The
+// JSON report is parsed into findings. --log-level is a GuardDog GLOBAL option
+// and must precede the ecosystem subcommand; --output-format and --no-sandbox
+// are per-scan options and stay after it.
 func (r *execRunner) Scan(ctx context.Context, eco, artifactName string, artifact []byte) ([]Finding, error) {
 	dir, absPath, err := writeTemp(eco, artifactName, artifact)
 	if err != nil {
@@ -228,7 +231,7 @@ func (r *execRunner) Scan(ctx context.Context, eco, artifactName string, artifac
 	scanCtx, cancel := context.WithTimeout(ctx, r.timeout)
 	defer cancel()
 
-	args := []string{eco, "scan", absPath, "--output-format=json", "--log-level=error"}
+	args := []string{"--log-level=error", eco, "scan", absPath, "--output-format=json"}
 	if !r.sandbox {
 		args = append(args, "--no-sandbox")
 	}
