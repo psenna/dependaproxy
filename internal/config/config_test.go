@@ -56,6 +56,16 @@ func TestLoadMulti(t *testing.T) {
 	if len(npm.Retrieval) != 2 || npm.Retrieval[0].Type != "local-disk-cache" || npm.Retrieval[1].Type != "upstream-registry" {
 		t.Errorf("npm retrieval = %+v", npm.Retrieval)
 	}
+	if npm.DenyList == nil {
+		t.Fatal("npm deny_list = nil, want parsed DenyListConfig")
+	}
+	if npm.DenyList.Enabled == nil || !*npm.DenyList.Enabled {
+		t.Errorf("npm deny_list.enabled = %v, want true", npm.DenyList.Enabled)
+	}
+	if len(npm.DenyList.RecordMiddlewares) != 2 ||
+		npm.DenyList.RecordMiddlewares[0] != "guarddog-scan" || npm.DenyList.RecordMiddlewares[1] != "cve-check" {
+		t.Errorf("npm deny_list.record_middlewares = %v, want [guarddog-scan cve-check]", npm.DenyList.RecordMiddlewares)
+	}
 	py := c.Registries[1]
 	if py.Type != "pypi" || py.Prefix != "/pypi" {
 		t.Errorf("pypi registry = %+v", py)
@@ -85,8 +95,11 @@ func TestExampleConfigParses(t *testing.T) {
 	if gop.Prefix != "/goproxy" || gop.Upstream != "https://proxy.golang.org" {
 		t.Errorf("goproxy prefix/upstream = %q/%q", gop.Prefix, gop.Upstream)
 	}
-	if len(gop.Validation) != 2 || gop.Validation[0].Type != "min-publication-age" || gop.Validation[1].Type != "cve-check" {
-		t.Errorf("goproxy validation = %+v", gop.Validation)
+	if len(gop.Validation) != 3 ||
+		gop.Validation[0].Type != "deny-list-check" ||
+		gop.Validation[1].Type != "min-publication-age" ||
+		gop.Validation[2].Type != "cve-check" {
+		t.Errorf("goproxy validation = %+v, want [deny-list-check min-publication-age cve-check]", gop.Validation)
 	}
 	if len(gop.Retrieval) != 2 || gop.Retrieval[0].Type != "local-disk-cache" || gop.Retrieval[1].Type != "upstream-registry" {
 		t.Errorf("goproxy retrieval = %+v", gop.Retrieval)

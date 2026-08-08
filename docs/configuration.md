@@ -63,6 +63,11 @@ registries:
 
 **Validation** (runs on first fetch, before the sha256 trust anchor is stored):
 
+- `deny-list-check` — consults the persistent deny list of previously-denied
+  (package, version, sha256, project) entries at the start of validation; denies
+  fast with the stored reason (403) without re-running the expensive scanners.
+  Auto-prepended FIRST for every request scope (projectless and project
+  overrides). Strict per-project scoping. Removal via a future admin dashboard.
 - `min-publication-age` — rejects packages published less than `min_days` ago
   (npm `time`; pypi per-file `upload-time`; fail-closed).
 - `cve-check` — queries **OSV.dev** for known vulnerabilities. Params:
@@ -87,6 +92,28 @@ registries:
   (default `false` — pass when no attestation is published), `on_error`
   (default `fail_open`), `identity` (regex on the signing cert SAN),
   `trust_root_dir`, `timeout`.
+
+### Deny list
+
+Validation failures from `{guarddog-scan, malware-scan, cve-check}` are recorded
+automatically to a persistent Postgres deny list — one row per (package, version,
+artifact sha256, project key, reason, middleware, timestamp). Transient
+scanner/source crashes are skipped (infrastructure, not a verdict). The
+`deny-list-check` middleware (auto-prepended FIRST for every request scope)
+denies fast with the stored reason (403) on the next request for the same
+package+hash+project, without re-running the expensive scanners. Because the
+artifact sha256 is part of the key, a republished artifact is a new row.
+Matching is strict per project scope: a denial blocks only the project (or
+projectless traffic) that triggered it.
+
+Config per registry under `deny_list`:
+
+| Key | Default | Description |
+|---|---|---|
+| `enabled` | `true` | `false` disables recording (`deny-list-check` still runs; nothing is recorded). |
+| `record_middlewares` | `[guarddog-scan, malware-scan, cve-check]` | Which validation failures are recorded as deny verdicts. |
+
+Removal of deny-list entries is a future admin-dashboard feature.
 
 **Retrieval** (runs on every serve, trusted and untrusted):
 

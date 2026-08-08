@@ -26,6 +26,11 @@ registries:
     prefix: /npm
     upstream: https://registry.npmjs.org
     validation:
+      # deny-list-check is auto-prepended FIRST by the resolver for every
+      # request scope; it denies fast (403, stored reason) when this
+      # package+hash+project was previously denied, without re-running the
+      # expensive scans. Listed here for visibility (idempotent — no duplicate).
+      - type: deny-list-check
       - type: min-publication-age
         params:
           min_days: 7
@@ -80,6 +85,12 @@ registries:
         params:
           path: /var/lib/dependaproxy/cache/npm
       - type: upstream-registry
+    # deny_list:                 # deny-list recorder (per registry; defaults shown)
+    #   enabled: true            # record validation failures to the deny list
+    #   record_middlewares:      # failures recorded as deny verdicts
+    #     - guarddog-scan
+    #     - malware-scan
+    #     - cve-check
     # Mutations are non-persistent view transforms re-applied on every serve
     # (trusted and untrusted). The stored sha256 remains the UPSTREAM hash;
     # the mutation rewrites the bytes served to the client AFTER verification.
@@ -95,6 +106,11 @@ registries:
     prefix: /pypi
     upstream: https://pypi.org/simple
     validation:
+      # deny-list-check is auto-prepended FIRST by the resolver for every
+      # request scope; it denies fast (403, stored reason) when this
+      # package+hash+project was previously denied, without re-running the
+      # expensive scans. Listed here for visibility (idempotent — no duplicate).
+      - type: deny-list-check
       - type: min-publication-age
         params:
           min_days: 7
@@ -134,6 +150,7 @@ registries:
         params:
           path: /var/lib/dependaproxy/cache/pypi
       - type: upstream-registry
+    # deny_list:  # defaults (as in npm): enabled with the three scanners below
 
   # The maven adapter is registered as a skeleton (returns 501); full Maven
   # Central routing/storage land in a future issue:
@@ -151,6 +168,11 @@ registries:
     prefix: /goproxy
     upstream: https://proxy.golang.org
     validation:
+      # deny-list-check is auto-prepended FIRST by the resolver for every
+      # request scope; it denies fast (403, stored reason) when this
+      # package+hash+project was previously denied, without re-running the
+      # expensive scans. Listed here for visibility (idempotent — no duplicate).
+      - type: deny-list-check
       - type: min-publication-age
         params:
           min_days: 7
@@ -158,6 +180,9 @@ registries:
         params:
           mode: deny
           on_error: fail_open
+    # deny_list:  # defaults (as in npm) but goproxy has no guarddog-scan or
+    #             # malware-scan in its validation chain — only cve-check
+    #             # failures can be recorded.
     # local-disk-cache sits before upstream-registry so validated .zip/.mod/.info
     # artifacts are served from disk on subsequent requests; the cache implements
     # pipeline.Evictor so a sha256 mismatch (trust flow) evicts the entry.
