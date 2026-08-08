@@ -12,6 +12,7 @@
 package localcache
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -24,11 +25,12 @@ import (
 
 // CacheBackend stores and retrieves validated artifact bytes by cache key. A
 // miss is reported with os.ErrNotExist. Implementations must be safe for
-// concurrent use.
+// concurrent use. The context is the request context (or the middleware's
+// shutdown context) so backends can honour cancellation and deadlines.
 type CacheBackend interface {
-	Get(key string) ([]byte, error)
-	Put(key string, data []byte) error
-	Delete(key string) error
+	Get(ctx context.Context, key string) ([]byte, error)
+	Put(ctx context.Context, key string, data []byte) error
+	Delete(ctx context.Context, key string) error
 }
 
 // DiskBackend stores artifacts under a base directory on the local filesystem.
@@ -40,12 +42,20 @@ type DiskBackend struct {
 func NewDisk(base string) *DiskBackend { return &DiskBackend{base: base} }
 
 // Get reads the artifact at base/key.
-func (b *DiskBackend) Get(key string) ([]byte, error) {
+func (b *DiskBackend) Get(ctx context.Context, key string) ([]byte, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	_ = ctx
 	return os.ReadFile(filepath.Join(b.base, key)) //nolint:gosec // G304: key is sanitized via cacheKey
 }
 
 // Put atomically writes the artifact at base/key (temp file + rename).
-func (b *DiskBackend) Put(key string, data []byte) error {
+func (b *DiskBackend) Put(ctx context.Context, key string, data []byte) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	_ = ctx
 	path := filepath.Join(b.base, key)
 	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return err
@@ -67,7 +77,11 @@ func (b *DiskBackend) Put(key string, data []byte) error {
 }
 
 // Delete removes the artifact at base/key; a missing file is not an error.
-func (b *DiskBackend) Delete(key string) error {
+func (b *DiskBackend) Delete(ctx context.Context, key string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	_ = ctx
 	err := os.Remove(filepath.Join(b.base, key))
 	if err != nil && !os.IsNotExist(err) {
 		return err
@@ -121,12 +135,12 @@ func (m *Middleware) Fetch(ctx *pipeline.PipelineContext) (bool, error) {
 	lk.Lock()
 	defer lk.Unlock()
 
-	if data, rerr := m.backend.Get(key); rerr == nil {
+	if data, rerr := m.backend.Get(ctx.Ctx, key); rerr == nil {
 		ctx.Tarball = &pipeline.Tarball{Bytes: data}
 		return true, nil
 	} else if !os.IsNotExist(rerr) {
 		// Unreadable cached entry (e.g. corrupt disk file): drop it, treat as miss.
-		_ = m.backend.Delete(key)
+		_ = m.backend.Delete(ctx.Ctx, key)
 	}
 
 	if m.next == nil {
@@ -137,7 +151,7 @@ func (m *Middleware) Fetch(ctx *pipeline.PipelineContext) (bool, error) {
 		return hit, err
 	}
 	if ctx.Tarball != nil {
-		_ = m.backend.Put(key, ctx.Tarball.Bytes)
+		_ = m.backend.Put(ctx.Ctx, key, ctx.Tarball.Bytes)
 	}
 	return true, nil
 }
@@ -149,7 +163,7 @@ func (m *Middleware) Evict(ctx *pipeline.PipelineContext) error {
 	if err != nil {
 		return err
 	}
-	return m.backend.Delete(key)
+	return m.backend.Delete(ctx.Ctx, key)
 }
 
 // cacheKey derives the cache key — a relative, platform-independent path — from

@@ -2,11 +2,13 @@ package localcache
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/psenna/dependaproxy/internal/pipeline"
 	"gopkg.in/yaml.v3"
@@ -163,7 +165,7 @@ type memBackend struct {
 
 func newMemBackend() *memBackend { return &memBackend{data: map[string][]byte{}} }
 
-func (b *memBackend) Get(key string) ([]byte, error) {
+func (b *memBackend) Get(ctx context.Context, key string) ([]byte, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	d, ok := b.data[key]
@@ -172,13 +174,13 @@ func (b *memBackend) Get(key string) ([]byte, error) {
 	}
 	return d, nil
 }
-func (b *memBackend) Put(key string, data []byte) error {
+func (b *memBackend) Put(ctx context.Context, key string, data []byte) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.data[key] = append([]byte(nil), data...)
 	return nil
 }
-func (b *memBackend) Delete(key string) error {
+func (b *memBackend) Delete(ctx context.Context, key string) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	delete(b.data, key)
@@ -215,5 +217,150 @@ func TestBackendAgnostic(t *testing.T) {
 	}
 	if _, ok := backend.data[key]; ok {
 		t.Fatal("evict should remove the key from the backend")
+	}
+}
+
+// ctxMarker is a context value used to prove the request context reaches the
+// backend (the middleware must thread ctx.Ctx through, not context.Background()).
+type ctxMarker struct{}
+
+// ctxRecordingBackend records the context received by each method.
+type ctxRecordingBackend struct {
+	mu     sync.Mutex
+	data   map[string][]byte
+	putCtx context.Context
+	delCtx context.Context
+}
+
+func newCtxRecordingBackend() *ctxRecordingBackend {
+	return &ctxRecordingBackend{data: map[string][]byte{}}
+}
+
+func (b *ctxRecordingBackend) Get(ctx context.Context, key string) ([]byte, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	d, ok := b.data[key]
+	if !ok {
+		return nil, os.ErrNotExist
+	}
+	return d, nil
+}
+func (b *ctxRecordingBackend) Put(ctx context.Context, key string, data []byte) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.putCtx = ctx
+	b.data[key] = append([]byte(nil), data...)
+	return nil
+}
+func (b *ctxRecordingBackend) Delete(ctx context.Context, key string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.delCtx = ctx
+	delete(b.data, key)
+	return nil
+}
+
+func TestFetchPassesContextToBackend(t *testing.T) {
+	backend := newCtxRecordingBackend()
+	m := NewBackend(backend, &nextStub{data: []byte("TARBALL")})
+
+	reqCtx := context.WithValue(context.Background(), ctxMarker{}, "marker")
+	c := &pipeline.PipelineContext{Ctx: reqCtx, Registry: "npm", PkgName: "express", Version: "4.18.0", ArtifactID: ""}
+	if hit, err := m.Fetch(c); err != nil || !hit {
+		t.Fatalf("fetch: hit=%v err=%v", hit, err)
+	}
+	backend.mu.Lock()
+	defer backend.mu.Unlock()
+	if backend.putCtx == nil {
+		t.Fatal("Put should have received the request context")
+	}
+	if v, _ := backend.putCtx.Value(ctxMarker{}).(string); v != "marker" {
+		t.Fatalf("Put ctx marker = %q want %q", v, "marker")
+	}
+}
+
+func TestEvictPassesContextToBackend(t *testing.T) {
+	backend := newCtxRecordingBackend()
+	m := NewBackend(backend, &nextStub{data: []byte("B")})
+	if _, err := m.Fetch(ctx("1.0.0", "")); err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+
+	reqCtx := context.WithValue(context.Background(), ctxMarker{}, "marker")
+	c := &pipeline.PipelineContext{Ctx: reqCtx, Registry: "npm", PkgName: "express", Version: "1.0.0", ArtifactID: ""}
+	if err := m.Evict(c); err != nil {
+		t.Fatalf("evict: %v", err)
+	}
+	backend.mu.Lock()
+	defer backend.mu.Unlock()
+	if backend.delCtx == nil {
+		t.Fatal("Delete should have received the request context")
+	}
+	if v, _ := backend.delCtx.Value(ctxMarker{}).(string); v != "marker" {
+		t.Fatalf("Delete ctx marker = %q want %q", v, "marker")
+	}
+}
+
+// blockingPutBackend blocks Put until the context is cancelled, recording the
+// context error it observed.
+type blockingPutBackend struct {
+	mu       sync.Mutex
+	data     map[string][]byte
+	putCalls int32
+	putErr   error
+}
+
+func (b *blockingPutBackend) Get(ctx context.Context, key string) ([]byte, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	d, ok := b.data[key]
+	if !ok {
+		return nil, os.ErrNotExist
+	}
+	return d, nil
+}
+func (b *blockingPutBackend) Put(ctx context.Context, key string, data []byte) error {
+	atomic.AddInt32(&b.putCalls, 1)
+	<-ctx.Done()
+	err := ctx.Err()
+	b.mu.Lock()
+	b.putErr = err
+	b.mu.Unlock()
+	return err
+}
+func (b *blockingPutBackend) Delete(ctx context.Context, key string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	delete(b.data, key)
+	return nil
+}
+
+func TestFetchCancelledAbortsBackendPut(t *testing.T) {
+	backend := &blockingPutBackend{data: map[string][]byte{}}
+	m := NewBackend(backend, &nextStub{data: []byte("TARBALL")})
+
+	reqCtx, cancel := context.WithCancel(context.Background())
+	c := &pipeline.PipelineContext{Ctx: reqCtx, Registry: "npm", PkgName: "express", Version: "4.18.0", ArtifactID: ""}
+	done := make(chan struct{})
+	go func() {
+		_, _ = m.Fetch(c)
+		close(done)
+	}()
+
+	// Wait until the write-through Put is blocked on the context, then cancel.
+	deadline := time.Now().Add(2 * time.Second)
+	for atomic.LoadInt32(&backend.putCalls) == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if atomic.LoadInt32(&backend.putCalls) == 0 {
+		t.Fatal("write-through Put was never reached")
+	}
+	cancel()
+	<-done
+
+	backend.mu.Lock()
+	defer backend.mu.Unlock()
+	if !errors.Is(backend.putErr, context.Canceled) {
+		t.Fatalf("Put err = %v want context.Canceled", backend.putErr)
 	}
 }
