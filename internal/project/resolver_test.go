@@ -2,9 +2,11 @@ package project_test
 
 import (
 	"context"
+	"errors"
 	"io"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/psenna/dependaproxy/internal/config"
 	"github.com/psenna/dependaproxy/internal/middleware/mutation"
@@ -47,6 +49,27 @@ func (s *fakeStore) getCount() int {
 	defer s.mu.Unlock()
 	return s.gets
 }
+
+// blockingStore is a project.Store whose Get blocks until ctx is done, then
+// returns ctx.Err(). It records that Get was entered so a test can assert the
+// request context actually reached the store.
+type blockingStore struct {
+	entered chan struct{}
+}
+
+func (s *blockingStore) Get(ctx context.Context, _ string) (project.ProjectConfig, error) {
+	select {
+	case s.entered <- struct{}{}:
+	default:
+	}
+	<-ctx.Done()
+	return project.ProjectConfig{}, ctx.Err()
+}
+func (s *blockingStore) Put(context.Context, project.ProjectConfig) error { return nil }
+func (s *blockingStore) List(context.Context) ([]project.ProjectConfig, error) {
+	return nil, nil
+}
+func (s *blockingStore) Delete(context.Context, string) error { return nil }
 
 func yamlNode(s string) yaml.Node {
 	var n yaml.Node
@@ -125,7 +148,7 @@ func TestResolveDefaultNoDB(t *testing.T) {
 	store, reg, global := newEnv(t)
 	r := project.NewResolver("npm", reg, store, global)
 
-	got, err := r.Resolve("")
+	got, err := r.Resolve(context.Background(), "")
 	if err != nil {
 		t.Fatalf("resolve default: %v", err)
 	}
@@ -135,7 +158,7 @@ func TestResolveDefaultNoDB(t *testing.T) {
 	if n := store.getCount(); n != 0 {
 		t.Errorf("store.Get calls = %d, want 0 (default key is pre-cached)", n)
 	}
-	if _, err := r.Resolve(""); err != nil {
+	if _, err := r.Resolve(context.Background(), ""); err != nil {
 		t.Fatalf("resolve default again: %v", err)
 	}
 	if n := store.getCount(); n != 0 {
@@ -147,7 +170,7 @@ func TestResolveUnknownFallsBackAndCaches(t *testing.T) {
 	store, reg, global := newEnv(t)
 	r := project.NewResolver("npm", reg, store, global)
 
-	got, err := r.Resolve("nope")
+	got, err := r.Resolve(context.Background(), "nope")
 	if err != nil {
 		t.Fatalf("resolve unknown: %v", err)
 	}
@@ -157,7 +180,7 @@ func TestResolveUnknownFallsBackAndCaches(t *testing.T) {
 	if n := store.getCount(); n != 1 {
 		t.Errorf("store.Get calls = %d, want 1", n)
 	}
-	if _, err := r.Resolve("nope"); err != nil {
+	if _, err := r.Resolve(context.Background(), "nope"); err != nil {
 		t.Fatalf("resolve unknown again: %v", err)
 	}
 	if n := store.getCount(); n != 1 {
@@ -177,7 +200,7 @@ func TestResolveKnownBuildsPerProject(t *testing.T) {
 	}
 	r := project.NewResolver("npm", reg, store, global)
 
-	rp, err := r.Resolve("acme")
+	rp, err := r.Resolve(context.Background(), "acme")
 	if err != nil {
 		t.Fatalf("resolve acme: %v", err)
 	}
@@ -199,7 +222,7 @@ func TestResolveKnownBuildsPerProject(t *testing.T) {
 		t.Errorf("store.Get calls = %d, want 1", n)
 	}
 	// Cached: the second resolve does not hit the store.
-	if _, err := r.Resolve("acme"); err != nil {
+	if _, err := r.Resolve(context.Background(), "acme"); err != nil {
 		t.Fatalf("resolve acme again: %v", err)
 	}
 	if n := store.getCount(); n != 1 {
@@ -219,7 +242,7 @@ func TestResolvePerChainFallback(t *testing.T) {
 	}
 	r := project.NewResolver("npm", reg, store, global)
 
-	rp, err := r.Resolve("acme")
+	rp, err := r.Resolve(context.Background(), "acme")
 	if err != nil {
 		t.Fatalf("resolve acme: %v", err)
 	}
@@ -251,7 +274,7 @@ func TestResolveMissingAdapterEntry(t *testing.T) {
 	}
 	r := project.NewResolver("npm", reg, store, global)
 
-	got, err := r.Resolve("acme")
+	got, err := r.Resolve(context.Background(), "acme")
 	if err != nil {
 		t.Fatalf("resolve acme: %v", err)
 	}
@@ -269,7 +292,7 @@ func TestResolveHooksAppliedToGlobal(t *testing.T) {
 		OnFailure: func(*pipeline.PipelineContext, error) { recorded++ },
 	})
 
-	got, err := r.Resolve("")
+	got, err := r.Resolve(context.Background(), "")
 	if err != nil {
 		t.Fatalf("resolve default: %v", err)
 	}
@@ -302,7 +325,7 @@ func TestResolveHooksAppliedToProjectOverride(t *testing.T) {
 		OnFailure: onFailure,
 	})
 
-	rp, err := r.Resolve("acme")
+	rp, err := r.Resolve(context.Background(), "acme")
 	if err != nil {
 		t.Fatalf("resolve acme: %v", err)
 	}
@@ -341,7 +364,7 @@ func TestResolveHooksIdempotentWhenAlreadyFirst(t *testing.T) {
 		OnFailure: func(*pipeline.PipelineContext, error) {},
 	})
 
-	rp, err := r.Resolve("acme")
+	rp, err := r.Resolve(context.Background(), "acme")
 	if err != nil {
 		t.Fatalf("resolve acme: %v", err)
 	}
@@ -366,14 +389,14 @@ func TestInvalidate(t *testing.T) {
 	}
 	r := project.NewResolver("npm", reg, store, global)
 
-	if _, err := r.Resolve("acme"); err != nil {
+	if _, err := r.Resolve(context.Background(), "acme"); err != nil {
 		t.Fatalf("resolve acme: %v", err)
 	}
 	if n := store.getCount(); n != 1 {
 		t.Fatalf("store.Get calls = %d, want 1", n)
 	}
 	// Resolving again is served from the cache.
-	if _, err := r.Resolve("acme"); err != nil {
+	if _, err := r.Resolve(context.Background(), "acme"); err != nil {
 		t.Fatalf("resolve acme again: %v", err)
 	}
 	if n := store.getCount(); n != 1 {
@@ -381,7 +404,7 @@ func TestInvalidate(t *testing.T) {
 	}
 	// Invalidate drops the cache entry; the next resolve re-reads the store.
 	r.Invalidate("acme")
-	if _, err := r.Resolve("acme"); err != nil {
+	if _, err := r.Resolve(context.Background(), "acme"); err != nil {
 		t.Fatalf("resolve acme after invalidate: %v", err)
 	}
 	if n := store.getCount(); n != 2 {
@@ -389,10 +412,44 @@ func TestInvalidate(t *testing.T) {
 	}
 	// Invalidate("") is a no-op; the cached entry survives.
 	r.Invalidate("")
-	if _, err := r.Resolve("acme"); err != nil {
+	if _, err := r.Resolve(context.Background(), "acme"); err != nil {
 		t.Fatalf("resolve acme after empty invalidate: %v", err)
 	}
 	if n := store.getCount(); n != 2 {
 		t.Fatalf("store.Get calls after empty invalidate = %d, want 2", n)
+	}
+}
+
+// TestResolveHonorsContextCancellation asserts Resolve threads the request
+// context into the store read: a cancelled context must cancel the store Get
+// (returning its error) instead of silently using context.Background().
+func TestResolveHonorsContextCancellation(t *testing.T) {
+	store := &blockingStore{entered: make(chan struct{}, 1)}
+	reg := pipeline.NewRegistry()
+	global := &project.Resolved{}
+	r := project.NewResolver("npm", reg, store, global)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // already cancelled before Resolve
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := r.Resolve(ctx, "acme")
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Resolve err = %v, want context.Canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Resolve did not return after ctx cancellation; ctx not threaded to the store")
+	}
+
+	select {
+	case <-store.entered:
+	default:
+		t.Fatal("store.Get was never entered; ctx was not passed to the store")
 	}
 }

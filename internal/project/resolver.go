@@ -66,12 +66,16 @@ func (r *Resolver) applyHooks(v *pipeline.ValidationPipeline) {
 
 // Resolve returns the pipelines for projectKey, building and caching them on
 // first use. An unknown key falls back to the global pipelines (also cached, so
-// the store is read at most once per key).
-func (r *Resolver) Resolve(projectKey string) (*Resolved, error) {
+// the store is read at most once per key). The store read is cancelled when ctx
+// is done; a nil ctx is treated as context.Background().
+func (r *Resolver) Resolve(ctx context.Context, projectKey string) (*Resolved, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if v, ok := r.cache.Load(projectKey); ok {
 		return v.(*Resolved), nil
 	}
-	cfg, err := r.store.Get(context.Background(), projectKey)
+	cfg, err := r.store.Get(ctx, projectKey)
 	if errors.Is(err, ErrProjectNotFound) {
 		actual, _ := r.cache.LoadOrStore(projectKey, r.global)
 		return actual.(*Resolved), nil
@@ -79,7 +83,7 @@ func (r *Resolver) Resolve(projectKey string) (*Resolved, error) {
 	if err != nil {
 		return nil, err
 	}
-	rp, err := r.build(cfg)
+	rp, err := r.build(ctx, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -97,8 +101,10 @@ func (r *Resolver) Invalidate(key string) {
 }
 
 // build assembles a Resolved from a project config, inheriting any chain the
-// project does not override from the global pipelines.
-func (r *Resolver) build(cfg ProjectConfig) (*Resolved, error) {
+// project does not override from the global pipelines. ctx is accepted for
+// forward compatibility so the Build* calls can be cancelled when they grow a
+// context parameter; it is not yet used.
+func (r *Resolver) build(ctx context.Context, cfg ProjectConfig) (*Resolved, error) {
 	rmw, ok := cfg.Registries[r.registryType]
 	if !ok {
 		return r.global, nil

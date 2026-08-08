@@ -166,7 +166,7 @@ func (a *goproxyAdapter) handleZip(w http.ResponseWriter, r *http.Request, escap
 	}
 	ctx := pipeline.NewPipelineContext(r.Context(), a.logger, "goproxy", module, version, "")
 	ctx.ProjectKey = pipeline.ProjectKeyFromContext(r.Context())
-	rp, err := a.resolver.Resolve(ctx.ProjectKey)
+	rp, err := a.resolver.Resolve(ctx.Ctx, ctx.ProjectKey)
 	if err != nil {
 		a.fail(w, r, http.StatusInternalServerError, "resolve project", err)
 		return
