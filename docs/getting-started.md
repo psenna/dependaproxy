@@ -68,9 +68,11 @@ curl http://localhost:8080/healthz
 # {"status":"ok"}
 ```
 
-> The image is `scratch`-based (CGo-free); the CA bundle is baked in so outbound
-> calls to `registry.npmjs.org` / `pypi.org` work. Because it runs as uid 65532,
-> give your config file and cache directories appropriate ownership.
+> The image is `python:3.13-slim`-based (the Go binary is CGo-free static; the
+> Python runtime ships the pinned **GuardDog** CLI for the `guarddog-scan`
+> middleware). The CA bundle is baked in so outbound calls to
+> `registry.npmjs.org` / `pypi.org` work. Because it runs as uid 65532, give your
+> config file and cache directories appropriate ownership.
 
 ## 3. Point your package managers at it
 
