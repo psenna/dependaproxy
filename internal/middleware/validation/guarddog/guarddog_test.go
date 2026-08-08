@@ -161,6 +161,20 @@ func TestFailClosedOnScanError(t *testing.T) {
 	if !strings.Contains(err.Error(), "guarddog-scan:") {
 		t.Fatalf("error should be prefixed with guarddog-scan:, got: %v", err)
 	}
+	if !errors.Is(err, ErrScannerUnavailable) {
+		t.Fatalf("fail_closed on a scan error should be flagged transient, got: %v", err)
+	}
+}
+
+func TestDenyFindingNotTransient(t *testing.T) {
+	m := New(Params{}, &fakeRunner{findings: []Finding{{RuleName: "R1"}}})
+	err := m.Validate(testCtx("npm", "testpkg", "1.0.0", "", []byte("tarball")))
+	if err == nil {
+		t.Fatal("deny mode should reject on findings")
+	}
+	if errors.Is(err, ErrScannerUnavailable) {
+		t.Fatalf("a real deny verdict must not be flagged transient, got: %v", err)
+	}
 }
 
 func TestEmptyTarballPasses(t *testing.T) {
