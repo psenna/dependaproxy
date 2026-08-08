@@ -126,6 +126,24 @@ func TestRecorderSkipsNonAllowlistedMiddleware(t *testing.T) {
 	}
 }
 
+func TestRecorderCustomAllowlist(t *testing.T) {
+	// A custom allowlist {"cve-check"} records a cve-check failure and skips a
+	// guarddog-scan failure (not in the allowlist), overriding the default.
+	f := &recorderFakeStore{}
+	hook := Recorder(f, fixedNow, "cve-check")
+
+	ctx := testPipelineCtx(t)
+	hook(ctx, &pipeline.ValidationError{Middleware: "cve-check", Err: errors.New("cve-check: deny")})
+	hook(ctx, &pipeline.ValidationError{Middleware: "guarddog-scan", Err: errors.New("guarddog-scan: flagged: malicious-exec")})
+
+	if len(f.recorded) != 1 {
+		t.Fatalf("Record calls = %d want 1 (only cve-check allowlisted)", len(f.recorded))
+	}
+	if got := f.recorded[0].Middleware; got != "cve-check" {
+		t.Errorf("Middleware = %q want %q", got, "cve-check")
+	}
+}
+
 func TestRecorderSkipsTransientScannerFailures(t *testing.T) {
 	cases := []struct {
 		name       string

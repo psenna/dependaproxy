@@ -67,10 +67,15 @@ func Factory(cfg config.RegistryConfig, deps adapter.Deps) (adapter.Adapter, err
 	if err != nil {
 		return nil, err
 	}
-	hooks := project.ValidationHooks{
-		Prepend:   dlv.Chain[0],
-		OnFailure: denylist.Recorder(denyStore, deps.Now),
+	allowlist := denylist.DefaultRecordedMiddlewares
+	if cfg.DenyList != nil && len(cfg.DenyList.RecordMiddlewares) > 0 {
+		allowlist = cfg.DenyList.RecordMiddlewares
 	}
+	var onFailure func(*pipeline.PipelineContext, error)
+	if cfg.DenyList == nil || cfg.DenyList.Enabled == nil || *cfg.DenyList.Enabled {
+		onFailure = denylist.Recorder(denyStore, deps.Now, allowlist...)
+	}
+	hooks := project.ValidationHooks{Prepend: dlv.Chain[0], OnFailure: onFailure}
 
 	var cache pipeline.Evictor
 	if e, ok := retrieval.Head.(pipeline.Evictor); ok {
