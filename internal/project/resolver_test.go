@@ -69,6 +69,18 @@ func (stubClient) FetchTarball(context.Context, string) (io.ReadCloser, int64, e
 	return nil, 0, nil
 }
 
+// stubValidation is a configurable-name validation middleware used to stand in
+// for the deny-list-check Prepend hook in resolver tests.
+type stubValidation struct{ name string }
+
+func (m *stubValidation) Name() string                             { return m.name }
+func (m *stubValidation) Validate(*pipeline.PipelineContext) error { return nil }
+
+// stubFactory returns a factory that always builds the given middleware.
+func stubFactory(m *stubValidation) pipeline.ValidationFactory {
+	return func(yaml.Node) (pipeline.ValidationMiddleware, error) { return m, nil }
+}
+
 // newEnv builds a Registry wired with the real npm middleware factories, a
 // global Resolved (cve-check deny + localcache retrieval + noop mutation), and
 // a fresh fake store.
@@ -245,6 +257,102 @@ func TestResolveMissingAdapterEntry(t *testing.T) {
 	}
 	if got != global {
 		t.Error("a project without a npm entry must fall back to the global Resolved")
+	}
+}
+
+func TestResolveHooksAppliedToGlobal(t *testing.T) {
+	store, reg, global := newEnv(t)
+	prepend := &stubValidation{name: "deny-list-check"}
+	recorded := 0
+	r := project.NewResolver("npm", reg, store, global, project.ValidationHooks{
+		Prepend:   prepend,
+		OnFailure: func(*pipeline.PipelineContext, error) { recorded++ },
+	})
+
+	got, err := r.Resolve("")
+	if err != nil {
+		t.Fatalf("resolve default: %v", err)
+	}
+	if len(got.Validation.Chain) == 0 || got.Validation.Chain[0] != prepend {
+		t.Errorf("global validation chain[0] = %v, want the prepend middleware", got.Validation.Chain)
+	}
+	if got.Validation.OnFailure == nil {
+		t.Error("global OnFailure is nil, want the hooks OnFailure")
+	}
+	if recorded != 0 {
+		t.Errorf("recorded = %d, want 0 (hook not invoked during resolve)", recorded)
+	}
+}
+
+func TestResolveHooksAppliedToProjectOverride(t *testing.T) {
+	store, reg, global := newEnv(t)
+	prepend := &stubValidation{name: "deny-list-check"}
+	reg.RegisterValidation("deny-list-check", stubFactory(prepend))
+	store.cfgs["acme"] = project.ProjectConfig{
+		Key: "acme",
+		Registries: map[string]config.RegistryMiddlewareConfig{
+			"npm": {
+				Validation: []config.Middleware{{Type: "cve-check", Params: yamlNode("endpoint: http://osv.invalid\nmode: warn")}},
+			},
+		},
+	}
+	onFailure := func(*pipeline.PipelineContext, error) {}
+	r := project.NewResolver("npm", reg, store, global, project.ValidationHooks{
+		Prepend:   prepend,
+		OnFailure: onFailure,
+	})
+
+	rp, err := r.Resolve("acme")
+	if err != nil {
+		t.Fatalf("resolve acme: %v", err)
+	}
+	if rp == global {
+		t.Error("acme must get a per-project Resolved, not the global")
+	}
+	if len(rp.Validation.Chain) != 2 {
+		t.Fatalf("acme validation chain len = %d, want 2 (prepend + cve-check)", len(rp.Validation.Chain))
+	}
+	if rp.Validation.Chain[0] != prepend {
+		t.Errorf("chain[0] = %v, want the prepend middleware (project override must not drop it)", rp.Validation.Chain[0])
+	}
+	if rp.Validation.OnFailure == nil {
+		t.Error("acme OnFailure is nil, want the hooks OnFailure")
+	}
+}
+
+func TestResolveHooksIdempotentWhenAlreadyFirst(t *testing.T) {
+	store, reg, global := newEnv(t)
+	prepend := &stubValidation{name: "deny-list-check"}
+	reg.RegisterValidation("deny-list-check", stubFactory(prepend))
+	// The project override already lists deny-list-check first.
+	store.cfgs["acme"] = project.ProjectConfig{
+		Key: "acme",
+		Registries: map[string]config.RegistryMiddlewareConfig{
+			"npm": {
+				Validation: []config.Middleware{
+					{Type: "deny-list-check"},
+					{Type: "cve-check", Params: yamlNode("endpoint: http://osv.invalid\nmode: warn")},
+				},
+			},
+		},
+	}
+	r := project.NewResolver("npm", reg, store, global, project.ValidationHooks{
+		Prepend:   prepend,
+		OnFailure: func(*pipeline.PipelineContext, error) {},
+	})
+
+	rp, err := r.Resolve("acme")
+	if err != nil {
+		t.Fatalf("resolve acme: %v", err)
+	}
+	if len(rp.Validation.Chain) != 2 {
+		t.Errorf("acme validation chain len = %d, want 2 (no duplicate prepend)", len(rp.Validation.Chain))
+	}
+	if rp.Validation.Chain[0] != prepend {
+		t.Errorf("chain[0] = %v, want the prepend middleware", rp.Validation.Chain[0])
+	}
+	if rp.Validation.OnFailure == nil {
+		t.Error("acme OnFailure is nil, want the hooks OnFailure")
 	}
 }
 

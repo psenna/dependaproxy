@@ -5,6 +5,7 @@ import (
 
 	"github.com/psenna/dependaproxy/internal/adapter"
 	"github.com/psenna/dependaproxy/internal/config"
+	"github.com/psenna/dependaproxy/internal/denylist"
 	"github.com/psenna/dependaproxy/internal/middleware/mutation"
 	"github.com/psenna/dependaproxy/internal/middleware/retrieval/cverecheck"
 	"github.com/psenna/dependaproxy/internal/middleware/retrieval/localcache"
@@ -29,8 +30,13 @@ func Factory(cfg config.RegistryConfig, deps adapter.Deps) (adapter.Adapter, err
 	if err != nil {
 		return nil, err
 	}
+	denyStore, err := denylist.OpenStore(context.Background(), deps.DB)
+	if err != nil {
+		return nil, err
+	}
 
 	reg := pipeline.NewRegistry()
+	reg.RegisterValidation("deny-list-check", denylist.Factory(denyStore))
 	reg.RegisterValidation("min-publication-age", MinPubFactory)
 	reg.RegisterValidation("cve-check", cve.Factory)
 	reg.RegisterValidation("malware-scan", malware.Factory)
@@ -57,6 +63,14 @@ func Factory(cfg config.RegistryConfig, deps adapter.Deps) (adapter.Adapter, err
 	if len(cfg.Mutation) == 0 {
 		mp.Chain = []pipeline.MutationMiddleware{mutation.NoOp{}}
 	}
+	dlv, err := reg.BuildValidation([]config.Middleware{{Type: "deny-list-check"}})
+	if err != nil {
+		return nil, err
+	}
+	hooks := project.ValidationHooks{
+		Prepend:   dlv.Chain[0],
+		OnFailure: denylist.Recorder(denyStore, deps.Now),
+	}
 
 	var cache pipeline.Evictor
 	if e, ok := retrieval.Head.(pipeline.Evictor); ok {
@@ -64,7 +78,7 @@ func Factory(cfg config.RegistryConfig, deps adapter.Deps) (adapter.Adapter, err
 	}
 
 	global := &project.Resolved{Validation: validation, Retrieval: retrieval, Mutation: mp, Cache: cache}
-	resolver := project.NewResolver(cfg.Type, reg, deps.ProjectStore, global)
+	resolver := project.NewResolver(cfg.Type, reg, deps.ProjectStore, global, hooks)
 	return &pypiAdapter{
 		prefix:   cfg.Prefix,
 		storage:  storage,
