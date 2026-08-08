@@ -3,6 +3,7 @@ package cve
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -58,6 +59,9 @@ func TestDenyRejectsVulnerable(t *testing.T) {
 	if !strings.Contains(err.Error(), "lodash@4.17.20") {
 		t.Fatalf("error should name package@version, got: %v", err)
 	}
+	if errors.Is(err, ErrSourceUnavailable) {
+		t.Fatalf("a real deny verdict must not be flagged transient, got: %v", err)
+	}
 }
 
 func TestWarnAllowsVulnerable(t *testing.T) {
@@ -98,15 +102,26 @@ func TestFailClosedOnSourceError(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 	m := New(params{Endpoint: srv.URL, OnError: "fail_closed"}, nil, nil)
-	if err := m.Validate(testCtx("lodash", "4.17.20")); err == nil {
+	err := m.Validate(testCtx("lodash", "4.17.20"))
+	if err == nil {
 		t.Fatal("fail_closed should reject when the source errors")
+	}
+	if !strings.Contains(err.Error(), "cve-check:") {
+		t.Fatalf("error should be prefixed with cve-check:, got: %v", err)
+	}
+	if !errors.Is(err, ErrSourceUnavailable) {
+		t.Fatalf("fail_closed on a source error should be flagged transient, got: %v", err)
 	}
 }
 
 func TestFailClosedOnNetworkError(t *testing.T) {
 	m := New(params{Endpoint: "http://127.0.0.1:1", OnError: "fail_closed"}, &http.Client{Timeout: time.Second}, nil)
-	if err := m.Validate(testCtx("lodash", "4.17.20")); err == nil {
+	err := m.Validate(testCtx("lodash", "4.17.20"))
+	if err == nil {
 		t.Fatal("fail_closed should reject on a network error")
+	}
+	if !errors.Is(err, ErrSourceUnavailable) {
+		t.Fatalf("fail_closed on a network error should be flagged transient, got: %v", err)
 	}
 }
 
