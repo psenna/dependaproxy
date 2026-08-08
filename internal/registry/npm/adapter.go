@@ -23,7 +23,7 @@ func init() { adapter.Register("npm", Factory) }
 
 // Factory builds the npm adapter from its RegistryConfig + shared Deps.
 func Factory(cfg config.RegistryConfig, deps adapter.Deps) (adapter.Adapter, error) {
-	client, err := New(cfg.Upstream, nil)
+	client, err := New(cfg.Upstream, cfg.AllowedUpstreamHosts, nil)
 	if err != nil {
 		return nil, err
 	}

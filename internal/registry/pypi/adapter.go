@@ -22,7 +22,10 @@ func init() { adapter.Register("pypi", Factory) }
 
 // Factory builds the pypi adapter from its RegistryConfig + shared Deps.
 func Factory(cfg config.RegistryConfig, deps adapter.Deps) (adapter.Adapter, error) {
-	client, err := New(cfg.Upstream, nil)
+	// PyPI file URLs live on files.pythonhosted.org, not pypi.org — ship it as
+	// a built-in default so strict base-host equality doesn't break PyPI out of
+	// the box. Operators add CDN hosts for mirrors via allowed_upstream_hosts.
+	client, err := New(cfg.Upstream, append([]string{"files.pythonhosted.org"}, cfg.AllowedUpstreamHosts...), nil)
 	if err != nil {
 		return nil, err
 	}

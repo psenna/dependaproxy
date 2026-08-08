@@ -48,7 +48,7 @@ func newUpstream(t *testing.T) (*httptest.Server, *string) {
 
 func TestFetchPackumentScoped(t *testing.T) {
 	srv, _ := newUpstream(t)
-	c, err := New(srv.URL, nil)
+	c, err := New(srv.URL, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +78,7 @@ func TestFetchPackumentScoped(t *testing.T) {
 
 func TestFetchPackumentRaw(t *testing.T) {
 	srv, _ := newUpstream(t)
-	c, _ := New(srv.URL, nil)
+	c, _ := New(srv.URL, nil, nil)
 	raw, err := c.FetchPackumentRaw(context.Background(), "@scope/pkg")
 	if err != nil {
 		t.Fatal(err)
@@ -90,7 +90,7 @@ func TestFetchPackumentRaw(t *testing.T) {
 
 func TestFetchPackumentNotFound(t *testing.T) {
 	srv, _ := newUpstream(t)
-	c, _ := New(srv.URL, nil)
+	c, _ := New(srv.URL, nil, nil)
 	_, err := c.FetchPackument(context.Background(), "missing")
 	if err != ErrNotFound {
 		t.Fatalf("err = %v want ErrNotFound", err)
@@ -99,7 +99,7 @@ func TestFetchPackumentNotFound(t *testing.T) {
 
 func TestFetchTarballStreamsBytes(t *testing.T) {
 	srv, tarballURL := newUpstream(t)
-	c, _ := New(srv.URL, nil)
+	c, _ := New(srv.URL, nil, nil)
 	rc, n, err := c.FetchTarball(context.Background(), *tarballURL)
 	if err != nil {
 		t.Fatal(err)
@@ -115,7 +115,73 @@ func TestFetchTarballStreamsBytes(t *testing.T) {
 }
 
 func TestNewRequiresUpstream(t *testing.T) {
-	if _, err := New("", nil); err == nil {
+	if _, err := New("", nil, nil); err == nil {
 		t.Fatal("want error for empty upstream")
+	}
+}
+
+// TestFetchTarballRejectsInternalHost: an upstream-advertised tarball URL
+// pointing at a cloud-metadata IP is rejected by the allowlist before any
+// request is made.
+func TestFetchTarballRejectsInternalHost(t *testing.T) {
+	srv, _ := newUpstream(t)
+	c, _ := New(srv.URL, nil, nil)
+	_, _, err := c.FetchTarball(context.Background(), "http://169.254.169.254/x.tgz")
+	if err == nil {
+		t.Fatal("want error for internal-host tarball URL")
+	}
+	if !strings.Contains(err.Error(), "not allowlisted") {
+		t.Errorf("err = %v, want allowlist rejection", err)
+	}
+}
+
+// TestFetchBytesRejectsInternalHost: a provenance dist.attestations.url
+// pointing at an internal host is rejected by the allowlist.
+func TestFetchBytesRejectsInternalHost(t *testing.T) {
+	srv, _ := newUpstream(t)
+	c, _ := New(srv.URL, nil, nil)
+	_, err := c.FetchBytes(context.Background(), "http://169.254.169.254/latest/meta-data/")
+	if err == nil {
+		t.Fatal("want error for internal-host provenance URL")
+	}
+	if !strings.Contains(err.Error(), "not allowlisted") {
+		t.Errorf("err = %v, want allowlist rejection", err)
+	}
+}
+
+// TestFetchTarballRejectsRedirectToInternal: an upstream 302 to an internal
+// host is rejected by the redirect allowlist check; the body is never read.
+func TestFetchTarballRejectsRedirectToInternal(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "http://169.254.169.254/x.tgz", http.StatusFound)
+	}))
+	t.Cleanup(srv.Close)
+
+	c, _ := New(srv.URL, nil, nil)
+	rc, _, err := c.FetchTarball(context.Background(), srv.URL+"/tarball.tgz")
+	if err == nil {
+		if rc != nil {
+			_ = rc.Close()
+		}
+		t.Fatal("want error following redirect to internal host")
+	}
+	if !strings.Contains(err.Error(), "not allowlisted") {
+		t.Errorf("err = %v, want allowlist rejection", err)
+	}
+}
+
+// TestFetchTarballAllowsExtraHost: a host in the operator-configured extra
+// allowlist (here 127.0.0.1, not the base upstream host) is fetched normally.
+func TestFetchTarballAllowsExtraHost(t *testing.T) {
+	srv, _ := newUpstream(t)
+	c, _ := New("http://registry.example.com", []string{"127.0.0.1"}, nil)
+	rc, n, err := c.FetchTarball(context.Background(), srv.URL+"/tarball.tgz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rc.Close() }()
+	b, _ := io.ReadAll(rc)
+	if string(b) != "TARBALL-BYTES" || n != int64(len("TARBALL-BYTES")) {
+		t.Errorf("body = %q n=%d", b, n)
 	}
 }

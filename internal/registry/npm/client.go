@@ -8,32 +8,46 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"time"
+
+	"github.com/psenna/dependaproxy/internal/registry/registryhttp"
 )
 
 // Client is an npm registry HTTP client.
 type Client struct {
-	base string // upstream base URL, no trailing slash
-	http *http.Client
+	base  string // upstream base URL, no trailing slash
+	http  *http.Client
+	allow *registryhttp.Allowlist
 }
 
-// New returns an npm client for the upstream registry. If httpClient is nil a
-// 30s-timeout client is used.
-func New(upstream string, httpClient *http.Client) (*Client, error) {
+// New returns an npm client for the upstream registry. extraAllowedHosts are
+// additional hosts (beyond the base upstream host) the client may fetch from,
+// e.g. operator-configured CDN mirrors. If httpClient is nil a 30s-timeout
+// client is used. Every fetch is validated against the host allowlist to
+// prevent SSRF via upstream-advertised URLs.
+func New(upstream string, extraAllowedHosts []string, httpClient *http.Client) (*Client, error) {
 	if strings.TrimSpace(upstream) == "" {
 		return nil, fmt.Errorf("npm: upstream is required")
 	}
-	if httpClient == nil {
-		httpClient = &http.Client{Timeout: 30 * time.Second}
+	allow, err := registryhttp.NewAllowlist(upstream, extraAllowedHosts)
+	if err != nil {
+		return nil, fmt.Errorf("npm: %w", err)
 	}
-	return &Client{base: strings.TrimRight(upstream, "/"), http: httpClient}, nil
+	return &Client{
+		base:  strings.TrimRight(upstream, "/"),
+		http:  allow.WrapClient(httpClient),
+		allow: allow,
+	}, nil
 }
 
 func (c *Client) packumentURL(name string) string { return c.base + "/" + name }
 
 // do performs a GET, handling 404 -> ErrNotFound and non-200 -> error. The
-// caller owns resp.Body on success.
+// caller owns resp.Body on success. The target is validated against the host
+// allowlist before the request is made.
 func (c *Client) do(ctx context.Context, target string) (*http.Response, error) {
+	if err := c.allow.CheckURL(ctx, target); err != nil {
+		return nil, fmt.Errorf("npm: %w", err)
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil) //nolint:gosec // G704: target is the operator-configured upstream URL; a proxy fetches upstream by design
 	if err != nil {
 		return nil, fmt.Errorf("npm: build request for %s: %w", target, err)

@@ -1,0 +1,11 @@
+server:
+  addr: ":8080"
+storage:
+  type: postgres
+  dsn: "postgres://u:p@host:5432/db?sslmode=disable"
+registries:
+  - type: npm
+    prefix: /npm
+    upstream: https://registry.npmjs.org
+    allowed_upstream_hosts:
+      - "https://cdn.example.com"

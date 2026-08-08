@@ -30,6 +30,31 @@ to get started; the full file is linked at the bottom.
 | pypi | `pypi` | `/pypi` | `https://pypi.org/simple` |
 | maven (skeleton) | `maven` | `/maven` | `https://repo1.maven.org/maven2` |
 
+### Upstream host allowlist (SSRF hardening)
+
+The npm and pypi upstream clients only fetch from an allowlist of hosts: the
+base `upstream` host, plus any hosts listed under `allowed_upstream_hosts`.
+Every upstream-advertised URL (npm `dist.tarball` / `dist.attestations.url`,
+PyPI file URLs) is validated against this allowlist before the request is made
+and again on every redirect hop, so a compromised upstream cannot redirect the
+proxy to internal targets (cloud metadata `169.254.169.254`, internal
+services). Hostnames are compared case-insensitively on hostname only (any port
+is allowed); hostnames that resolve to loopback/private/link-local addresses
+are rejected, and DNS failures fail closed.
+
+The **pypi** adapter always includes `files.pythonhosted.org` (PyPI file URLs
+live on that host, not `pypi.org`); the **npm** adapter ships no extra default.
+Operators of private mirrors add their CDN hosts here:
+
+```yaml
+registries:
+  - type: npm
+    prefix: /npm
+    upstream: https://registry.npmjs.org
+    allowed_upstream_hosts:
+      - cdn.example.com
+```
+
 A registry's middleware lists configure its validation, retrieval, and mutation
 pipelines:
 

@@ -66,7 +66,7 @@ func newProvenanceAdapter(t *testing.T, srv *httptest.Server, params string) (*p
 	t.Helper()
 	dir := t.TempDir()
 	store := newMemStore()
-	client, err := New(srv.URL, nil)
+	client, err := New(srv.URL, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
