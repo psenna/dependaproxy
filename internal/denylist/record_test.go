@@ -16,21 +16,21 @@ import (
 	"github.com/psenna/dependaproxy/internal/pipeline"
 )
 
-// fakeStore records every Record call and its captured Denials. err injects a
+// recorderFakeStore records every Record call and its captured Denials. err injects a
 // Record failure; Lookup is unused by the recorder but required by Store.
-type fakeStore struct {
+type recorderFakeStore struct {
 	recorded []Denial
 	err      error
 }
 
-var _ Store = (*fakeStore)(nil)
+var _ Store = (*recorderFakeStore)(nil)
 
-func (f *fakeStore) Record(_ context.Context, d Denial) error {
+func (f *recorderFakeStore) Record(_ context.Context, d Denial) error {
 	f.recorded = append(f.recorded, d)
 	return f.err
 }
 
-func (f *fakeStore) Lookup(context.Context, string, string, string, string, string) (string, bool, error) {
+func (f *recorderFakeStore) Lookup(context.Context, string, string, string, string, string) (string, bool, error) {
 	return "", false, nil
 }
 
@@ -58,7 +58,7 @@ func wantSha(t *testing.T, b []byte) string {
 }
 
 func TestRecorderRecordsAllowlistedMiddleware(t *testing.T) {
-	f := &fakeStore{}
+	f := &recorderFakeStore{}
 	hook := Recorder(f, fixedNow)
 
 	ctx := testPipelineCtx(t)
@@ -95,7 +95,7 @@ func TestRecorderSkipsNilOrEmptyTarball(t *testing.T) {
 		{Bytes: []byte{}},
 	}
 	for _, tb := range cases {
-		f := &fakeStore{}
+		f := &recorderFakeStore{}
 		ctx := testPipelineCtx(t)
 		ctx.Tarball = tb
 		hook := Recorder(f, fixedNow)
@@ -107,7 +107,7 @@ func TestRecorderSkipsNilOrEmptyTarball(t *testing.T) {
 }
 
 func TestRecorderSkipsNonValidationError(t *testing.T) {
-	f := &fakeStore{}
+	f := &recorderFakeStore{}
 	ctx := testPipelineCtx(t)
 	hook := Recorder(f, fixedNow)
 	hook(ctx, errors.New("some unrelated pipeline error"))
@@ -117,7 +117,7 @@ func TestRecorderSkipsNonValidationError(t *testing.T) {
 }
 
 func TestRecorderSkipsNonAllowlistedMiddleware(t *testing.T) {
-	f := &fakeStore{}
+	f := &recorderFakeStore{}
 	ctx := testPipelineCtx(t)
 	hook := Recorder(f, fixedNow)
 	hook(ctx, &pipeline.ValidationError{Middleware: "min-publication-age", Err: errors.New("too new")})
@@ -145,7 +145,7 @@ func TestRecorderSkipsTransientScannerFailures(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			f := &fakeStore{}
+			f := &recorderFakeStore{}
 			ctx := testPipelineCtx(t)
 			hook := Recorder(f, fixedNow)
 			hook(ctx, &pipeline.ValidationError{Middleware: tc.middleware, Err: tc.err})
@@ -157,7 +157,7 @@ func TestRecorderSkipsTransientScannerFailures(t *testing.T) {
 }
 
 func TestRecorderBestEffortOnRecordError(t *testing.T) {
-	f := &fakeStore{err: errors.New("db down")}
+	f := &recorderFakeStore{err: errors.New("db down")}
 	ctx := testPipelineCtx(t)
 	hook := Recorder(f, fixedNow)
 
@@ -171,7 +171,7 @@ func TestRecorderBestEffortOnRecordError(t *testing.T) {
 }
 
 func TestRecorderRecordsNonTransientCVEDenyVerdict(t *testing.T) {
-	f := &fakeStore{}
+	f := &recorderFakeStore{}
 	hook := Recorder(f, fixedNow)
 
 	ctx := testPipelineCtx(t)

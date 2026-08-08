@@ -17,6 +17,15 @@ type Resolved struct {
 	Cache      pipeline.Evictor // nil if retrieval head is not a cache
 }
 
+// ValidationHooks are applied by the Resolver to EVERY validation pipeline it
+// builds (the global default and each project override), so deny-list-check
+// always runs first and failures are always recorded, regardless of whether a
+// project config overrides the validation chain.
+type ValidationHooks struct {
+	Prepend   pipeline.ValidationMiddleware // e.g. deny-list-check; prepended if not already first
+	OnFailure func(*pipeline.PipelineContext, error)
+}
+
 // Resolver maps a project key to the Resolved pipelines for that project,
 // falling back to the global pipelines when the key is unknown. Results are
 // memoized in an in-process cache; Invalidate removes one entry.
@@ -25,15 +34,34 @@ type Resolver struct {
 	reg          *pipeline.Registry
 	store        Store
 	global       *Resolved
+	hooks        ValidationHooks
 	cache        sync.Map // string -> *Resolved
 }
 
 // NewResolver returns a Resolver for one registry type. The empty key maps to
 // global (the pre-project default path) and is never re-read from the store.
-func NewResolver(registryType string, reg *pipeline.Registry, store Store, global *Resolved) *Resolver {
+// An optional ValidationHooks value is applied to the global pipeline now and
+// to every project pipeline built later.
+func NewResolver(registryType string, reg *pipeline.Registry, store Store, global *Resolved, hooks ...ValidationHooks) *Resolver {
 	r := &Resolver{registryType: registryType, reg: reg, store: store, global: global}
+	if len(hooks) > 0 {
+		r.hooks = hooks[0]
+	}
+	r.applyHooks(&global.Validation) // the global is a *Resolved; mutate it
 	r.cache.Store("", global)
 	return r
+}
+
+// applyHooks prepends hooks.Prepend (unless the chain already starts with it)
+// and sets hooks.OnFailure. It is applied to the global pipeline in NewResolver
+// and to every project pipeline in build.
+func (r *Resolver) applyHooks(v *pipeline.ValidationPipeline) {
+	if r.hooks.Prepend != nil && (len(v.Chain) == 0 || v.Chain[0].Name() != r.hooks.Prepend.Name()) {
+		v.Chain = append([]pipeline.ValidationMiddleware{r.hooks.Prepend}, v.Chain...)
+	}
+	if r.hooks.OnFailure != nil {
+		v.OnFailure = r.hooks.OnFailure
+	}
 }
 
 // Resolve returns the pipelines for projectKey, building and caching them on
@@ -107,5 +135,10 @@ func (r *Resolver) build(cfg ProjectConfig) (*Resolved, error) {
 	} else {
 		rp.Mutation = r.global.Mutation
 	}
+	// Apply the hooks to whatever branch set rp.Validation (the built override
+	// or the inherited global — the latter is harmless, the hooks are already
+	// applied and idempotent), so project overrides can never drop the
+	// deny-list check or the failure recorder.
+	r.applyHooks(&rp.Validation)
 	return rp, nil
 }
