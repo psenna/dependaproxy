@@ -29,7 +29,7 @@ func pypiCtx(name string) *pipeline.PipelineContext {
 
 func newPypiClient(t *testing.T, srv *httptest.Server) *Client {
 	t.Helper()
-	c, err := New(srv.URL, nil)
+	c, err := New(srv.URL, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

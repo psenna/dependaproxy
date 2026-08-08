@@ -25,6 +25,11 @@ registries:
   - type: npm
     prefix: /npm
     upstream: https://registry.npmjs.org
+    # SSRF hardening: the upstream client only fetches from the base upstream
+    # host plus these extra hosts (e.g. CDN mirrors). Every upstream-advertised
+    # URL (tarball, provenance bundle) is validated against this allowlist.
+    # allowed_upstream_hosts:
+    #   - cdn.example.com
     validation:
       # deny-list-check is auto-prepended FIRST by the resolver for every
       # request scope; it denies fast (403, stored reason) when this
@@ -105,6 +110,11 @@ registries:
   - type: pypi
     prefix: /pypi
     upstream: https://pypi.org/simple
+    # SSRF hardening: the upstream client only fetches from the base upstream
+    # host, files.pythonhosted.org (auto-included — PyPI file URLs live there),
+    # plus these extra hosts (e.g. CDN mirrors for a private mirror).
+    # allowed_upstream_hosts:
+    #   - files.example-mirror.com
     validation:
       # deny-list-check is auto-prepended FIRST by the resolver for every
       # request scope; it denies fast (403, stored reason) when this

@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -32,7 +33,7 @@ func newUpstream(t *testing.T) *httptest.Server {
 
 func TestFetchIndex(t *testing.T) {
 	srv := newUpstream(t)
-	c, err := New(srv.URL+"/simple", nil)
+	c, err := New(srv.URL+"/simple", nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +56,7 @@ func TestFetchIndex(t *testing.T) {
 
 func TestFetchIndexRaw(t *testing.T) {
 	srv := newUpstream(t)
-	c, _ := New(srv.URL+"/simple", nil)
+	c, _ := New(srv.URL+"/simple", nil, nil)
 	body, ct, err := c.FetchIndexRaw(context.Background(), "testpkg", acceptJSON)
 	if err != nil {
 		t.Fatal(err)
@@ -70,7 +71,7 @@ func TestFetchIndexRaw(t *testing.T) {
 
 func TestFetchIndexNotFound(t *testing.T) {
 	srv := newUpstream(t)
-	c, _ := New(srv.URL+"/simple", nil)
+	c, _ := New(srv.URL+"/simple", nil, nil)
 	_, err := c.FetchIndex(context.Background(), "missing")
 	if err != ErrNotFound {
 		t.Fatalf("err = %v want ErrNotFound", err)
@@ -79,7 +80,7 @@ func TestFetchIndexNotFound(t *testing.T) {
 
 func TestFetchFile(t *testing.T) {
 	srv := newUpstream(t)
-	c, _ := New(srv.URL+"/simple", nil)
+	c, _ := New(srv.URL+"/simple", nil, nil)
 	rc, n, err := c.FetchFile(context.Background(), srv.URL+"/file.whl")
 	if err != nil {
 		t.Fatal(err)
@@ -101,7 +102,43 @@ func TestNormalizeName(t *testing.T) {
 }
 
 func TestNewRequiresUpstream(t *testing.T) {
-	if _, err := New("", nil); err == nil {
+	if _, err := New("", nil, nil); err == nil {
 		t.Fatal("want error for empty upstream")
+	}
+}
+
+// TestFetchFileRejectsInternalHost: an upstream-advertised file URL pointing
+// at a cloud-metadata IP is rejected by the allowlist before any request is
+// made.
+func TestFetchFileRejectsInternalHost(t *testing.T) {
+	srv := newUpstream(t)
+	c, _ := New(srv.URL+"/simple", nil, nil)
+	_, _, err := c.FetchFile(context.Background(), "http://169.254.169.254/x.whl")
+	if err == nil {
+		t.Fatal("want error for internal-host file URL")
+	}
+	if !strings.Contains(err.Error(), "not allowlisted") {
+		t.Errorf("err = %v, want allowlist rejection", err)
+	}
+}
+
+// TestFetchFileRejectsRedirectToInternal: an upstream 302 to an internal host
+// is rejected by the redirect allowlist check; the body is never read.
+func TestFetchFileRejectsRedirectToInternal(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "http://169.254.169.254/x.whl", http.StatusFound)
+	}))
+	t.Cleanup(srv.Close)
+
+	c, _ := New(srv.URL+"/simple", nil, nil)
+	rc, _, err := c.FetchFile(context.Background(), srv.URL+"/file.whl")
+	if err == nil {
+		if rc != nil {
+			_ = rc.Close()
+		}
+		t.Fatal("want error following redirect to internal host")
+	}
+	if !strings.Contains(err.Error(), "not allowlisted") {
+		t.Errorf("err = %v, want allowlist rejection", err)
 	}
 }

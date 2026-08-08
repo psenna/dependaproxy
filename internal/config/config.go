@@ -7,7 +7,9 @@
 package config
 
 import (
+	"errors"
 	"fmt"
+	"net"
 	"os"
 	"strings"
 
@@ -48,13 +50,19 @@ type Log struct {
 
 // RegistryConfig configures one registry adapter.
 type RegistryConfig struct {
-	Type       string          `yaml:"type"`     // adapter type: npm, pypi, maven, ...
-	Prefix     string          `yaml:"prefix"`   // URL path prefix, e.g. "/npm"
-	Upstream   string          `yaml:"upstream"` // upstream registry URL
-	Validation []Middleware    `yaml:"validation"`
-	Retrieval  []Middleware    `yaml:"retrieval"`
-	Mutation   []Middleware    `yaml:"mutation"`
-	DenyList   *DenyListConfig `yaml:"deny_list"`
+	Type     string `yaml:"type"`     // adapter type: npm, pypi, maven, ...
+	Prefix   string `yaml:"prefix"`   // URL path prefix, e.g. "/npm"
+	Upstream string `yaml:"upstream"` // upstream registry URL
+	// AllowedUpstreamHosts are additional hosts (beyond the base upstream host)
+	// the upstream client may fetch from, e.g. CDN mirrors. Every upstream
+	// fetch is validated against this allowlist to prevent SSRF via
+	// upstream-advertised URLs. The pypi adapter always includes
+	// files.pythonhosted.org (PyPI file URLs live there).
+	AllowedUpstreamHosts []string        `yaml:"allowed_upstream_hosts"`
+	Validation           []Middleware    `yaml:"validation"`
+	Retrieval            []Middleware    `yaml:"retrieval"`
+	Mutation             []Middleware    `yaml:"mutation"`
+	DenyList             *DenyListConfig `yaml:"deny_list"`
 }
 
 // DenyListConfig configures the deny-list recorder for one registry.
@@ -114,7 +122,8 @@ func (c *Config) Validate() error {
 		errs = append(errs, "at least one registry is required")
 	}
 	seen := map[string]bool{}
-	for i, r := range c.Registries {
+	for i := range c.Registries {
+		r := &c.Registries[i]
 		if strings.TrimSpace(r.Type) == "" {
 			errs = append(errs, fmt.Sprintf("registries[%d]: type is required", i))
 		}
@@ -128,6 +137,14 @@ func (c *Config) Validate() error {
 		}
 		if strings.TrimSpace(r.Upstream) == "" {
 			errs = append(errs, fmt.Sprintf("registries[%d]: upstream is required", i))
+		}
+		for j, h := range r.AllowedUpstreamHosts {
+			norm, err := normalizeAllowedHost(h)
+			if err != nil {
+				errs = append(errs, fmt.Sprintf("registries[%d].allowed_upstream_hosts[%d]: %v", i, j, err))
+				continue
+			}
+			r.AllowedUpstreamHosts[j] = norm
 		}
 		errs = append(errs, validateMiddlewares(fmt.Sprintf("registries[%d].validation", i), r.Validation)...)
 		errs = append(errs, validateMiddlewares(fmt.Sprintf("registries[%d].retrieval", i), r.Retrieval)...)
@@ -150,4 +167,25 @@ func validateMiddlewares(name string, ms []Middleware) []string {
 		}
 	}
 	return errs
+}
+
+// normalizeAllowedHost lowercases, trims whitespace and a trailing dot, and
+// strips a numeric port (hosts are compared on hostname only). Entries that
+// carry a scheme, path, query, userinfo, or a non-numeric port are rejected.
+func normalizeAllowedHost(h string) (string, error) {
+	h = strings.ToLower(strings.TrimSpace(h))
+	h = strings.TrimSuffix(h, ".")
+	if h == "" {
+		return "", errors.New("empty host")
+	}
+	if strings.ContainsAny(h, "/@?#") {
+		return "", fmt.Errorf("malformed host %q", h)
+	}
+	if host, _, err := net.SplitHostPort(h); err == nil {
+		h = host
+	}
+	if h == "" {
+		return "", errors.New("empty host")
+	}
+	return h, nil
 }

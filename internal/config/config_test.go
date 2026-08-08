@@ -41,6 +41,11 @@ func TestLoadMulti(t *testing.T) {
 	if npm.Type != "npm" || npm.Prefix != "/npm" || npm.Upstream != "https://registry.npmjs.org" {
 		t.Errorf("npm registry = %+v", npm)
 	}
+	if len(npm.AllowedUpstreamHosts) != 2 ||
+		npm.AllowedUpstreamHosts[0] != "cdn.example.com" ||
+		npm.AllowedUpstreamHosts[1] != "files.pythonhosted.org" {
+		t.Errorf("npm allowed_upstream_hosts = %v, want [cdn.example.com files.pythonhosted.org] (lowercased, trailing dot and port stripped)", npm.AllowedUpstreamHosts)
+	}
 	if len(npm.Validation) != 1 || npm.Validation[0].Type != "min-publication-age" {
 		t.Fatalf("npm validation = %+v", npm.Validation)
 	}
@@ -111,6 +116,7 @@ func TestNoRegistries(t *testing.T)        { wantErr(t, "no_registries.yaml", "a
 func TestBadStorage(t *testing.T)          { wantErr(t, "bad_storage.yaml", "postgres") }
 func TestMissingUpstream(t *testing.T)     { wantErr(t, "missing_upstream.yaml", "upstream is required") }
 func TestEmptyMiddlewareType(t *testing.T) { wantErr(t, "empty_type.yaml", "type is required") }
+func TestBadAllowedHost(t *testing.T)      { wantErr(t, "bad_allowed_host.yaml", "allowed_upstream_hosts") }
 
 func TestDefaults(t *testing.T) {
 	c := mustLoad(t, "multi.yaml")

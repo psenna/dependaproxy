@@ -9,7 +9,8 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
-	"time"
+
+	"github.com/psenna/dependaproxy/internal/registry/registryhttp"
 )
 
 const (
@@ -27,24 +28,38 @@ func NormalizeName(name string) string {
 
 // Client is a PyPI simple-API HTTP client.
 type Client struct {
-	base string // upstream base URL, no trailing slash (e.g. https://pypi.org/simple)
-	http *http.Client
+	base  string // upstream base URL, no trailing slash (e.g. https://pypi.org/simple)
+	http  *http.Client
+	allow *registryhttp.Allowlist
 }
 
-// New returns a pypi client for the upstream simple index.
-func New(upstream string, httpClient *http.Client) (*Client, error) {
+// New returns a pypi client for the upstream simple index. extraAllowedHosts
+// are additional hosts (beyond the base upstream host) the client may fetch
+// from — the adapter ships files.pythonhosted.org (PyPI file URLs live there)
+// plus any operator-configured CDN mirrors. If httpClient is nil a 30s-timeout
+// client is used. Every fetch is validated against the host allowlist to
+// prevent SSRF via upstream-advertised URLs.
+func New(upstream string, extraAllowedHosts []string, httpClient *http.Client) (*Client, error) {
 	if strings.TrimSpace(upstream) == "" {
 		return nil, fmt.Errorf("pypi: upstream is required")
 	}
-	if httpClient == nil {
-		httpClient = &http.Client{Timeout: 30 * time.Second}
+	allow, err := registryhttp.NewAllowlist(upstream, extraAllowedHosts)
+	if err != nil {
+		return nil, fmt.Errorf("pypi: %w", err)
 	}
-	return &Client{base: strings.TrimRight(upstream, "/"), http: httpClient}, nil
+	return &Client{
+		base:  strings.TrimRight(upstream, "/"),
+		http:  allow.WrapClient(httpClient),
+		allow: allow,
+	}, nil
 }
 
 func (c *Client) indexURL(name string) string { return c.base + "/" + NormalizeName(name) + "/" }
 
 func (c *Client) do(ctx context.Context, target string) (*http.Response, error) {
+	if err := c.allow.CheckURL(ctx, target); err != nil {
+		return nil, fmt.Errorf("pypi: %w", err)
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil) //nolint:gosec // G704: operator-configured upstream URL
 	if err != nil {
 		return nil, fmt.Errorf("pypi: build request for %s: %w", target, err)
@@ -81,6 +96,9 @@ func (c *Client) FetchIndex(ctx context.Context, name string) (*Project, error) 
 // FetchIndexRaw returns the upstream index body verbatim + its content-type.
 func (c *Client) FetchIndexRaw(ctx context.Context, name, accept string) ([]byte, string, error) {
 	target := c.indexURL(name)
+	if err := c.allow.CheckURL(ctx, target); err != nil {
+		return nil, "", fmt.Errorf("pypi: %w", err)
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil) //nolint:gosec // G704
 	if err != nil {
 		return nil, "", fmt.Errorf("pypi: build request for %s: %w", target, err)

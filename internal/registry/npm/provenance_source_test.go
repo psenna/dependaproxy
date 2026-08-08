@@ -35,7 +35,7 @@ func packumentJSON(attURL, tarURL string) []byte {
 
 func newNpmClient(t *testing.T, srv *httptest.Server) *Client {
 	t.Helper()
-	c, err := New(srv.URL, nil)
+	c, err := New(srv.URL, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +164,7 @@ func TestNpmProvenanceSourceBundleNotFound(t *testing.T) {
 		}
 	}))
 	t.Cleanup(srv.Close)
-	c, err := New(srv.URL, nil)
+	c, err := New(srv.URL, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

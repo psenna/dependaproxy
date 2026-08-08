@@ -12,6 +12,9 @@ registries:
   - type: npm
     prefix: /npm
     upstream: https://registry.npmjs.org
+    allowed_upstream_hosts:
+      - "CDN.EXAMPLE.com."
+      - files.pythonhosted.org:443
     validation:
       - type: min-publication-age
         params:
