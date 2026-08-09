@@ -481,3 +481,119 @@ func TestPypiUpstreamNotFound(t *testing.T) {
 		t.Fatalf("code=%d want 404", code)
 	}
 }
+
+// --- issue #116: unparseable filenames must not bypass the proxy ---
+
+// TestPypiIndexRewritesUnparseable asserts every file URL is rewritten to the
+// proxy route, including files whose filename cannot be parsed to a version
+// (those get the "_" sentinel version). No file keeps its upstream URL.
+func TestPypiIndexRewritesUnparseable(t *testing.T) {
+	dir := t.TempDir()
+	raw := []byte(`{"meta":{"api-version":"1.0"},"name":"testpkg","files":[{"filename":"` + wheelFile + `","url":"http://up/f.whl","requires-python":">=3.7"},{"filename":"bad.whl","url":"http://up/bad.whl"}]}`)
+	proj := &Project{Name: "testpkg", Files: []File{{Filename: wheelFile, URL: "http://up/f.whl"}}}
+	c := &rawClient{project: proj, raw: raw, file: []byte("WHEEL")}
+	a := newTestAdapter(t, "/pypi", dir, 0, c, newMemStore())
+	srv := newTestServer(t, a)
+
+	resp, err := http.Get(srv.URL + "/pypi/simple/testpkg/") //nolint:gosec // G107
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	var doc map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&doc); err != nil {
+		t.Fatal(err)
+	}
+	files := doc["files"].([]any)
+	if len(files) != 2 {
+		t.Fatalf("files len = %d, want 2", len(files))
+	}
+	normal := files[0].(map[string]any)["url"].(string)
+	if !strings.HasSuffix(normal, "/pypi/files/testpkg/1.0.0/"+wheelFile) {
+		t.Errorf("normal url = %q, want suffix /pypi/files/testpkg/1.0.0/%s", normal, wheelFile)
+	}
+	bad := files[1].(map[string]any)["url"].(string)
+	if !strings.HasSuffix(bad, "/pypi/files/testpkg/_/bad.whl") {
+		t.Errorf("unparseable url = %q, want suffix /pypi/files/testpkg/_/bad.whl", bad)
+	}
+	if strings.Contains(bad, "http://up/bad.whl") {
+		t.Errorf("unparseable url still points upstream: %q", bad)
+	}
+}
+
+// TestPypiUnparseableFile404 drives the pip-style flow for a package whose only
+// file is unparseable: the rewritten file URL must 404 on the proxy side and
+// the upstream FetchFile must never be called (no bypass to upstream).
+func TestPypiUnparseableFile404(t *testing.T) {
+	dir := t.TempDir()
+	raw := []byte(`{"meta":{"api-version":"1.0"},"name":"testpkg","files":[{"filename":"bad.whl","url":"http://up/bad.whl"}]}`)
+	proj := &Project{Name: "testpkg", Files: []File{{Filename: "bad.whl", URL: "http://up/bad.whl"}}}
+	c := &rawClient{project: proj, raw: raw, file: []byte("WHEEL")}
+	a := newTestAdapter(t, "/pypi", dir, 0, c, newMemStore())
+	srv := newTestServer(t, a)
+
+	code, _ := fetchViaProxy(t, srv.URL+"/pypi", "testpkg")
+	if code != 404 {
+		t.Fatalf("code=%d want 404", code)
+	}
+	if atomic.LoadInt32(&c.fileCalls) != 0 {
+		t.Errorf("upstream FetchFile called %d times; want 0 (no bypass)", c.fileCalls)
+	}
+}
+
+// TestPypiUnparseableSdistEmptyVersion covers the ver == "" branch: a
+// degenerate sdist filename whose name part strips to empty rewrites with the
+// "_" sentinel and the file request 404s.
+func TestPypiUnparseableSdistEmptyVersion(t *testing.T) {
+	dir := t.TempDir()
+	raw := []byte(`{"meta":{"api-version":"1.0"},"name":"testpkg","files":[{"filename":".tar.gz","url":"http://up/x.tar.gz"}]}`)
+	proj := &Project{Name: "testpkg", Files: []File{{Filename: ".tar.gz", URL: "http://up/x.tar.gz"}}}
+	c := &rawClient{project: proj, raw: raw, file: []byte("WHEEL")}
+	a := newTestAdapter(t, "/pypi", dir, 0, c, newMemStore())
+	srv := newTestServer(t, a)
+
+	resp, err := http.Get(srv.URL + "/pypi/simple/testpkg/") //nolint:gosec // G107
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	var doc map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&doc); err != nil {
+		t.Fatal(err)
+	}
+	url := doc["files"].([]any)[0].(map[string]any)["url"].(string)
+	if !strings.HasSuffix(url, "/pypi/files/testpkg/_/.tar.gz") {
+		t.Errorf("rewritten url = %q, want suffix /pypi/files/testpkg/_/.tar.gz", url)
+	}
+
+	tr, err := http.Get(url) //nolint:gosec // G107
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tr.Body.Close() }()
+	_, _ = io.ReadAll(tr.Body)
+	if tr.StatusCode != 404 {
+		t.Fatalf("file code=%d want 404", tr.StatusCode)
+	}
+	if atomic.LoadInt32(&c.fileCalls) != 0 {
+		t.Errorf("upstream FetchFile called %d times; want 0", c.fileCalls)
+	}
+}
+
+// TestPypiLocalVersionWheelRewritesAndServes locks in that url.PathEscape does
+// not break real-world local-version wheels (PEP 440 +local segment): the file
+// still rewrites to the proxy route and serves 200 through the trust flow.
+func TestPypiLocalVersionWheelRewritesAndServes(t *testing.T) {
+	dir := t.TempDir()
+	const localWheel = "testpkg-1.0.0+local-py3-none-any.whl"
+	raw := []byte(`{"meta":{"api-version":"1.0"},"name":"testpkg","files":[{"filename":"` + localWheel + `","url":"http://up/f.whl"}]}`)
+	proj := &Project{Name: "testpkg", Files: []File{{Filename: localWheel, URL: "http://up/f.whl"}}}
+	c := &rawClient{project: proj, raw: raw, file: []byte("WHEEL")}
+	a := newTestAdapter(t, "/pypi", dir, 0, c, newMemStore())
+	srv := newTestServer(t, a)
+
+	code, body := fetchViaProxy(t, srv.URL+"/pypi", "testpkg")
+	if code != 200 || string(body) != "WHEEL" {
+		t.Fatalf("code=%d body=%q want 200/WHEEL", code, body)
+	}
+}
