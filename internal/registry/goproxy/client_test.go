@@ -71,6 +71,27 @@ func TestFetchList(t *testing.T) {
 	}
 }
 
+func TestFetchListTrailingNewlines(t *testing.T) {
+	// A list with multiple trailing newlines must not yield a spurious empty
+	// version (issue #125).
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		_, _ = io.WriteString(w, "v1.0.0\nv1.1.0\n\n")
+	}))
+	defer srv.Close()
+	c, err := New(srv.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	versions, err := c.FetchList(context.Background(), testModule)
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	if len(versions) != 2 || versions[0] != "v1.0.0" || versions[1] != "v1.1.0" {
+		t.Errorf("versions = %v, want [v1.0.0 v1.1.0] (no empty entry)", versions)
+	}
+}
+
 func TestFetchInfo(t *testing.T) {
 	srv, _ := newUpstream(t)
 	c, _ := New(srv.URL, nil)
