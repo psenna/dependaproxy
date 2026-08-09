@@ -372,6 +372,50 @@ func TestPypiIndexRewrites(t *testing.T) {
 	}
 }
 
+func TestPypiIndexStripsCoreMetadata(t *testing.T) {
+	dir := t.TempDir()
+	proj, _ := buildPack(time.Now().AddDate(0, 0, -30), []byte("WHEEL"))
+	raw := []byte(`{"meta":{"api-version":"1.0"},"name":"testpkg","files":[{"filename":"` + wheelFile + `","url":"http://up/f.whl","data-dist-info-metadata":true,"core-metadata":true}]}`)
+	c := &rawClient{project: proj, raw: raw, file: []byte("WHEEL")}
+	a := newTestAdapter(t, "/pypi", dir, 0, c, newMemStore())
+	srv := newTestServer(t, a)
+
+	resp, err := http.Get(srv.URL + "/pypi/simple/testpkg/") //nolint:gosec // G107
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	var doc map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&doc); err != nil {
+		t.Fatal(err)
+	}
+	file := doc["files"].([]any)[0].(map[string]any)
+	for _, k := range []string{"data-dist-info-metadata", "core-metadata"} {
+		if _, ok := file[k]; ok {
+			t.Errorf("%s should be stripped (proxy does not serve PEP 658 metadata)", k)
+		}
+	}
+}
+
+func TestPypiMetadataFile404(t *testing.T) {
+	dir := t.TempDir()
+	proj, _ := buildPack(time.Now().AddDate(0, 0, -30), []byte("WHEEL"))
+	c := &rawClient{project: proj, raw: nil, file: []byte("WHEEL")}
+	a := newTestAdapter(t, "/pypi", dir, 0, c, newMemStore())
+	srv := newTestServer(t, a)
+
+	// PEP 658 metadata files (X.whl.metadata) are not served; pip falls back to
+	// downloading the distribution and reading its metadata from it.
+	resp, err := http.Get(srv.URL + "/pypi/files/testpkg/1.0.0/testpkg-1.0.0-py3-none-any.whl.metadata") //nolint:gosec // G107
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("code = %d want 404", resp.StatusCode)
+	}
+}
+
 func TestPypiUntrustedValidatesStoresServes(t *testing.T) {
 	dir := t.TempDir()
 	store := newMemStore()
