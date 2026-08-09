@@ -56,3 +56,19 @@ func TestParseVersion(t *testing.T) {
 		t.Fatalf("ParseVersion = %q err=%v", v, err)
 	}
 }
+
+// TestParseVersionEmpty locks the exact condition rewriteIndexJSON and
+// handleFile rely on: a degenerate sdist whose name strips to empty parses
+// with a nil error but an empty version, while a malformed wheel errors.
+func TestParseVersionEmpty(t *testing.T) {
+	v, err := ParseVersion(".tar.gz")
+	if err != nil {
+		t.Fatalf("ParseVersion(.tar.gz) err=%v, want nil", err)
+	}
+	if v != "" {
+		t.Errorf("ParseVersion(.tar.gz) = %q, want \"\"", v)
+	}
+	if v, err := ParseVersion("bad.whl"); err == nil {
+		t.Errorf("ParseVersion(bad.whl) = %q err=nil, want error", v)
+	}
+}

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -15,6 +16,12 @@ import (
 	"github.com/psenna/dependaproxy/internal/project"
 	"github.com/psenna/dependaproxy/internal/pypifilename"
 )
+
+// unparseableVersion is the version path segment used for files whose filename
+// cannot be parsed to a version. The proxy rewrites every file URL to its own
+// route (never leaving the upstream URL intact) and 404s these files on the
+// proxy side, so clients can never bypass the trust flow by fetching upstream.
+const unparseableVersion = "_"
 
 // pypiAdapter is the PyPI registry adapter. Pipelines are resolved per request
 // scope (default or project) via the project resolver.
@@ -81,6 +88,14 @@ func (a *pypiAdapter) handleFile(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, r, http.StatusNotFound, "not found")
 		return
 	}
+	// Security boundary (issue #116): a filename that cannot be parsed to a
+	// version is served by no route — the index rewrite maps it to the "_"
+	// sentinel version, and this gate 404s it here. Re-parse the filename
+	// itself (not the path version sentinel) so the two stay symmetric.
+	if v, err := pypifilename.ParseVersion(filename); err != nil || v == "" {
+		a.fail(w, r, http.StatusNotFound, "unparseable filename")
+		return
+	}
 	ctx := pipeline.NewPipelineContext(r.Context(), a.logger, "pypi", pkg, version, filename)
 	ctx.ProjectKey = pipeline.ProjectKeyFromContext(r.Context())
 	rp, err := a.resolver.Resolve(ctx.Ctx, ctx.ProjectKey)
@@ -142,7 +157,10 @@ func (a *pypiAdapter) serveUntrusted(w http.ResponseWriter, r *http.Request, ctx
 	}
 	info, err := pypifilename.Parse(filename)
 	if err != nil {
-		a.fail(w, r, http.StatusInternalServerError, "parse filename", err)
+		// Defense-in-depth: handleFile gates on ParseVersion before this
+		// point, so this branch is normally unreachable. 404 (not 500) so an
+		// unparseable filename is never served as a valid artifact.
+		a.fail(w, r, http.StatusNotFound, "parse filename", err)
 		return
 	}
 	rec := Record{
@@ -302,9 +320,12 @@ func rewriteIndexJSON(raw []byte, base, name string) ([]byte, error) {
 		fn, _ := m["filename"].(string)
 		ver, err := pypifilename.ParseVersion(fn)
 		if err != nil || ver == "" {
-			continue
+			// Unparseable filename: still rewrite to the proxy route under the
+			// sentinel version so no file keeps its upstream URL. handleFile
+			// 404s these on the proxy side (issue #116).
+			ver = unparseableVersion
 		}
-		m["url"] = base + "/files/" + name + "/" + ver + "/" + fn
+		m["url"] = base + "/files/" + name + "/" + ver + "/" + url.PathEscape(fn)
 	}
 	return json.Marshal(doc)
 }
