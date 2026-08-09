@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"encoding/base64"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -46,8 +47,40 @@ func TestTokenAuthMissingHeader(t *testing.T) {
 }
 
 func TestTokenAuthNonBearer(t *testing.T) {
+	// A scheme that is neither Bearer nor Basic is rejected.
 	h := newAuthHandler("s3cret-token", nil, nil)
-	rr := doReq(h, "/express", "Basic dXNlcjpwYXNz")
+	rr := doReq(h, "/express", "Digest realm=foo")
+	if rr.Code != 401 {
+		t.Fatalf("code=%d want 401", rr.Code)
+	}
+}
+
+func basicAuth(user, pass string) string {
+	return "Basic " + base64.StdEncoding.EncodeToString([]byte(user+":"+pass))
+}
+
+func TestTokenAuthValidBasic(t *testing.T) {
+	// Basic auth with the token as the password is accepted (pip / Go module
+	// proxy clients only speak Basic).
+	h := newAuthHandler("s3cret-token", nil, nil)
+	rr := doReq(h, "/express", basicAuth("dependaproxy", "s3cret-token"))
+	if rr.Code != 200 || rr.Body.String() != "ok" {
+		t.Fatalf("code=%d body=%q", rr.Code, rr.Body.String())
+	}
+}
+
+func TestTokenAuthWrongBasicPassword(t *testing.T) {
+	h := newAuthHandler("s3cret-token", nil, nil)
+	rr := doReq(h, "/express", basicAuth("dependaproxy", "wrong"))
+	if rr.Code != 401 {
+		t.Fatalf("code=%d want 401", rr.Code)
+	}
+}
+
+func TestTokenAuthMalformedBasic(t *testing.T) {
+	h := newAuthHandler("s3cret-token", nil, nil)
+	// "Basic " with a non-base64 payload.
+	rr := doReq(h, "/express", "Basic not-base64!!!")
 	if rr.Code != 401 {
 		t.Fatalf("code=%d want 401", rr.Code)
 	}

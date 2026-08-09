@@ -1,6 +1,5 @@
 // Package server wires DependaProxy's HTTP layer. This file provides the
-// static bearer-token auth middleware; the routes/handler are added in a later
-// task.
+// static token auth middleware; the routes/handler are added in a later task.
 package server
 
 import (
@@ -10,13 +9,20 @@ import (
 	"strings"
 )
 
-const bearerPrefix = "Bearer "
+const (
+	bearerPrefix = "Bearer "
+	basicPrefix  = "Basic "
+)
 
-// TokenAuth wraps next with static bearer-token authentication. If token is
-// empty, auth is disabled and next is returned unchanged. exempt, if non-nil,
-// returns true for request paths that skip auth (e.g. "/healthz"). A missing or
-// mismatched Authorization header yields 401; the configured token is never
-// logged.
+// TokenAuth wraps next with static token authentication. It accepts either a
+// bearer token (`Authorization: Bearer <token>`) or HTTP Basic auth
+// (`Authorization: Basic base64(user:pass)`) where the password equals the
+// token (the username is ignored — the password is the credential). The Basic
+// form exists so clients that only speak Basic (pip, Go's module proxy client)
+// can authenticate with the same shared token. If token is empty, auth is
+// disabled and next is returned unchanged. exempt, if non-nil, returns true for
+// request paths that skip auth (e.g. "/healthz"). A missing or mismatched
+// Authorization header yields 401; the configured token is never logged.
 func TokenAuth(token string, exempt func(string) bool, log *slog.Logger, next http.Handler) http.Handler {
 	if token == "" {
 		return next
@@ -27,13 +33,23 @@ func TokenAuth(token string, exempt func(string) bool, log *slog.Logger, next ht
 			return
 		}
 		provided := r.Header.Get("Authorization")
-		if !strings.HasPrefix(provided, bearerPrefix) {
-			unauthorized(w, log, r, "missing or non-bearer Authorization header")
+		var cred string
+		switch {
+		case strings.HasPrefix(provided, bearerPrefix):
+			cred = provided[len(bearerPrefix):]
+		case strings.HasPrefix(provided, basicPrefix):
+			_, pass, ok := r.BasicAuth()
+			if !ok {
+				unauthorized(w, log, r, "malformed basic auth")
+				return
+			}
+			cred = pass
+		default:
+			unauthorized(w, log, r, "missing or unsupported Authorization header")
 			return
 		}
-		cred := provided[len(bearerPrefix):]
 		if subtle.ConstantTimeCompare([]byte(cred), []byte(token)) != 1 {
-			unauthorized(w, log, r, "invalid bearer token")
+			unauthorized(w, log, r, "invalid token")
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -47,6 +63,6 @@ func unauthorized(w http.ResponseWriter, log *slog.Logger, r *http.Request, reas
 			"reason", reason,
 		)
 	}
-	w.Header().Set("WWW-Authenticate", `Bearer realm="dependaproxy"`)
+	w.Header().Set("WWW-Authenticate", `Bearer realm="dependaproxy", Basic realm="dependaproxy"`)
 	http.Error(w, "unauthorized", http.StatusUnauthorized)
 }
