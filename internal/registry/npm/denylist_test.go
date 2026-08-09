@@ -223,7 +223,7 @@ func TestDenylistWiringStructural(t *testing.T) {
 	client := &rawClient{pack: pack, raw: raw, tarball: []byte("TARBALL")}
 	a := newDenylistTestAdapter(t, dir, client, newMemStore(), deny, func() time.Time { return time.Now().UTC() })
 
-	rp, err := a.resolver.Resolve("")
+	rp, err := a.resolver.Resolve(context.Background(), "")
 	if err != nil {
 		t.Fatalf("resolve default: %v", err)
 	}
@@ -249,7 +249,7 @@ func TestDenylistRecorderWired(t *testing.T) {
 	client := &rawClient{pack: pack, raw: raw, tarball: []byte("TARBALL")}
 	a := newDenylistTestAdapter(t, dir, client, newMemStore(), deny, func() time.Time { return time.Now().UTC() })
 
-	rp, err := a.resolver.Resolve("")
+	rp, err := a.resolver.Resolve(context.Background(), "")
 	if err != nil {
 		t.Fatalf("resolve default: %v", err)
 	}
