@@ -108,8 +108,10 @@ func (c *Client) FetchList(ctx context.Context, module string) ([]string, error)
 	if err != nil {
 		return nil, fmt.Errorf("goproxy: read list %s: %w", target, err)
 	}
-	versions := strings.Split(string(b), "\n")
-	// Drop a single trailing empty element produced by the trailing newline.
+	// Trim all trailing newlines before splitting so a list with multiple
+	// trailing newlines does not yield a spurious empty version (issue #125).
+	versions := strings.Split(strings.TrimRight(string(b), "\n"), "\n")
+	// Drop a single trailing empty element produced by an all-newline body.
 	if len(versions) > 0 && versions[len(versions)-1] == "" {
 		versions = versions[:len(versions)-1]
 	}
