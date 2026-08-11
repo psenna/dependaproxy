@@ -20,7 +20,7 @@ func (f fakeAd) InvalidateProjectCache(string) {}
 
 func newDispatchServer(t *testing.T, token string) *Server {
 	t.Helper()
-	adapter.Register("server-dispatch-test", func(cfg config.RegistryConfig, _ adapter.Deps) (adapter.Adapter, error) {
+	adapter.Register("server-dispatch-test", func(_ context.Context, cfg config.RegistryConfig, _ adapter.Deps) (adapter.Adapter, error) {
 		return fakeAd{prefix: cfg.Prefix}, nil
 	})
 	cfg := &config.Config{

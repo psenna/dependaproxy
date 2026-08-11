@@ -22,16 +22,16 @@ import (
 func init() { adapter.Register("npm", Factory) }
 
 // Factory builds the npm adapter from its RegistryConfig + shared Deps.
-func Factory(cfg config.RegistryConfig, deps adapter.Deps) (adapter.Adapter, error) {
+func Factory(ctx context.Context, cfg config.RegistryConfig, deps adapter.Deps) (adapter.Adapter, error) {
 	client, err := New(cfg.Upstream, cfg.AllowedUpstreamHosts, nil)
 	if err != nil {
 		return nil, err
 	}
-	storage, err := OpenStorage(context.Background(), deps.DB)
+	storage, err := OpenStorage(ctx, deps.DB)
 	if err != nil {
 		return nil, err
 	}
-	denyStore, err := denylist.OpenStore(context.Background(), deps.DB)
+	denyStore, err := denylist.OpenStore(ctx, deps.DB)
 	if err != nil {
 		return nil, err
 	}

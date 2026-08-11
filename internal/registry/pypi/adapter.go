@@ -21,7 +21,7 @@ import (
 func init() { adapter.Register("pypi", Factory) }
 
 // Factory builds the pypi adapter from its RegistryConfig + shared Deps.
-func Factory(cfg config.RegistryConfig, deps adapter.Deps) (adapter.Adapter, error) {
+func Factory(ctx context.Context, cfg config.RegistryConfig, deps adapter.Deps) (adapter.Adapter, error) {
 	// PyPI file URLs live on files.pythonhosted.org, not pypi.org — ship it as
 	// a built-in default so strict base-host equality doesn't break PyPI out of
 	// the box. Operators add CDN hosts for mirrors via allowed_upstream_hosts.
@@ -29,11 +29,11 @@ func Factory(cfg config.RegistryConfig, deps adapter.Deps) (adapter.Adapter, err
 	if err != nil {
 		return nil, err
 	}
-	storage, err := OpenStorage(context.Background(), deps.DB)
+	storage, err := OpenStorage(ctx, deps.DB)
 	if err != nil {
 		return nil, err
 	}
-	denyStore, err := denylist.OpenStore(context.Background(), deps.DB)
+	denyStore, err := denylist.OpenStore(ctx, deps.DB)
 	if err != nil {
 		return nil, err
 	}

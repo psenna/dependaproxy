@@ -1,6 +1,7 @@
 package maven
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/psenna/dependaproxy/internal/adapter"
@@ -28,7 +29,8 @@ func (a *mavenAdapter) Handler() http.Handler {
 	})
 }
 
-// Factory builds the maven skeleton adapter.
-func Factory(cfg config.RegistryConfig, _ adapter.Deps) (adapter.Adapter, error) {
+// Factory builds the maven skeleton adapter. ctx is ignored: the skeleton
+// performs no startup work yet.
+func Factory(_ context.Context, cfg config.RegistryConfig, _ adapter.Deps) (adapter.Adapter, error) {
 	return &mavenAdapter{prefix: cfg.Prefix}, nil
 }

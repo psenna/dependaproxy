@@ -7,6 +7,7 @@
 package adapter
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"log/slog"
@@ -40,8 +41,10 @@ type Adapter interface {
 	InvalidateProjectCache(key string)
 }
 
-// Factory builds an adapter from its RegistryConfig + shared Deps.
-type Factory func(cfg config.RegistryConfig, deps Deps) (Adapter, error)
+// Factory builds an adapter from its RegistryConfig + shared Deps. ctx is the
+// server startup context; factories use it for any startup work (opening
+// storage, initializing stores) so cancellation/timeouts propagate.
+type Factory func(ctx context.Context, cfg config.RegistryConfig, deps Deps) (Adapter, error)
 
 var factories = map[string]Factory{}
 
@@ -52,15 +55,15 @@ func Register(typeName string, f Factory) {
 }
 
 // Build builds all adapters for the configured registries, rejecting unknown
-// types.
-func Build(cfgs []config.RegistryConfig, deps Deps) ([]Adapter, error) {
+// types. ctx is passed to each factory so startup work respects its deadline.
+func Build(ctx context.Context, cfgs []config.RegistryConfig, deps Deps) ([]Adapter, error) {
 	out := make([]Adapter, 0, len(cfgs))
 	for i, rc := range cfgs {
 		f, ok := factories[rc.Type]
 		if !ok {
 			return nil, fmt.Errorf("registries[%d]: unknown registry type %q", i, rc.Type)
 		}
-		a, err := f(rc, deps)
+		a, err := f(ctx, rc, deps)
 		if err != nil {
 			return nil, fmt.Errorf("registries[%d] %s: %w", i, rc.Type, err)
 		}
