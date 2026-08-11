@@ -49,9 +49,17 @@ func Recorder(s Store, now func() time.Time, allowlist ...string) func(*pipeline
 		if errors.Is(err, guarddog.ErrScannerUnavailable) || errors.Is(err, cve.ErrSourceUnavailable) {
 			return
 		}
-		h, _, herr := hash.Sha256Hex(bytes.NewReader(ctx.Tarball.Bytes))
-		if herr != nil {
-			return
+		h, ok := ctx.Sha256FromMetadata()
+		if !ok {
+			// Defensive fallback: serveUntrusted stashes the hash before running
+			// the validation chain, so this is only reachable for direct callers
+			// (tests) or future non-serveUntrusted uses. Recompute to keep
+			// behavior identical.
+			var herr error
+			h, _, herr = hash.Sha256Hex(bytes.NewReader(ctx.Tarball.Bytes))
+			if herr != nil {
+				return
+			}
 		}
 		d := Denial{
 			Registry:   ctx.Registry,

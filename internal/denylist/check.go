@@ -47,12 +47,19 @@ func (m *checkMiddleware) Validate(ctx *pipeline.PipelineContext) error {
 		// Defensive; validation runs after retrieval so the tarball is present.
 		return nil
 	}
-	h, _, err := hash.Sha256Hex(bytes.NewReader(ctx.Tarball.Bytes))
-	if err != nil {
-		if ctx.Log != nil {
-			ctx.Log.Warn("deny-list-check: hashing artifact failed; serving (fail_open)", "err", err)
+	h, ok := ctx.Sha256FromMetadata()
+	if !ok {
+		// Defensive fallback: serveUntrusted stashes the hash before running the
+		// validation chain, so this is only reachable for direct callers (tests)
+		// or future non-serveUntrusted uses. Recompute to keep behavior identical.
+		var err error
+		h, _, err = hash.Sha256Hex(bytes.NewReader(ctx.Tarball.Bytes))
+		if err != nil {
+			if ctx.Log != nil {
+				ctx.Log.Warn("deny-list-check: hashing artifact failed; serving (fail_open)", "err", err)
+			}
+			return nil
 		}
-		return nil
 	}
 	reason, ok, err := m.store.Lookup(ctx.Ctx, ctx.Registry, ctx.PkgName, ctx.Version, h, ctx.ProjectKey)
 	if err != nil {

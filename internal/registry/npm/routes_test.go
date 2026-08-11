@@ -202,6 +202,53 @@ func TestNpmUntrustedValidatesStoresServes(t *testing.T) {
 	}
 }
 
+// shaRecorder is a validation middleware that captures the sha256 stashed in
+// ctx.Metadata by serveUntrusted, proving the hash is computed once and made
+// available to the chain before validation runs.
+type shaRecorder struct {
+	mu  sync.Mutex
+	got string
+}
+
+func (*shaRecorder) Name() string { return "sha-recorder" }
+func (r *shaRecorder) Validate(ctx *pipeline.PipelineContext) error {
+	if h, ok := ctx.Sha256FromMetadata(); ok {
+		r.mu.Lock()
+		r.got = h
+		r.mu.Unlock()
+	}
+	return nil
+}
+
+func TestNpmUntrustedStashesSha256InMetadata(t *testing.T) {
+	dir := t.TempDir()
+	store := newMemStore()
+	pack, raw := buildPack(time.Now().AddDate(0, 0, -30), []byte("TARBALL"))
+	client := &rawClient{pack: pack, raw: raw, tarball: []byte("TARBALL")}
+
+	rec := &shaRecorder{}
+	global := &project.Resolved{
+		Validation: pipeline.ValidationPipeline{Chain: []pipeline.ValidationMiddleware{rec}},
+	}
+	a := newTestAdapterWithGlobal(t, "/npm", dir, 0, client, store, global)
+	srv := newTestServer(t, a)
+
+	code, body := fetchViaProxy(t, srv.URL+"/npm", "testpkg", "1.0.0")
+	if code != 200 || string(body) != "TARBALL" {
+		t.Fatalf("code=%d body=%q", code, body)
+	}
+	want, _, _ := hash.Sha256Hex(bytes.NewReader([]byte("TARBALL")))
+	if rec.got != want {
+		t.Errorf("validation middleware saw stashed sha256 = %q, want %q", rec.got, want)
+	}
+	// The stash must be removed before the record's metadata JSON is built, so
+	// the persisted metadata blob stays byte-identical to before this issue.
+	gotRec := store.recs[k("testpkg", "1.0.0")]
+	if bytes.Contains(gotRec.Metadata, []byte("sha256")) {
+		t.Errorf("stored record metadata contains %q, want it removed: %s", "sha256", gotRec.Metadata)
+	}
+}
+
 func TestNpmTrustedServedFromCache(t *testing.T) {
 	dir := t.TempDir()
 	store := newMemStore()

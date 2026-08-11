@@ -435,6 +435,10 @@ func TestPypiUntrustedValidatesStoresServes(t *testing.T) {
 	if r.FileType != "wheel" || r.PythonTag != "py3" || r.AbiTag != "none" || r.PlatformTag != "any" {
 		t.Errorf("stored tags = %+v", r)
 	}
+	want, _, _ := hash.Sha256Hex(bytes.NewReader([]byte("WHEEL")))
+	if r.Sha256 != want {
+		t.Errorf("stored Sha256 = %q, want %q", r.Sha256, want)
+	}
 }
 
 func TestPypiTrustedServedFromCache(t *testing.T) {

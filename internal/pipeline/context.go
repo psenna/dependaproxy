@@ -34,6 +34,17 @@ type PipelineContext struct {
 	Metadata   map[string]any
 }
 
+// Sha256FromMetadata returns the sha256 hex string previously stashed by an
+// adapter's serveUntrusted, and ok=false when none is present. Consumers
+// (denylist check/record) use this to skip recomputing the full-tarball hash.
+func (c *PipelineContext) Sha256FromMetadata() (string, bool) {
+	if c == nil || c.Metadata == nil {
+		return "", false
+	}
+	h, ok := c.Metadata["sha256"].(string)
+	return h, ok && h != ""
+}
+
 // NewPipelineContext constructs a context with a background ctx if none is
 // provided and an initialized Metadata map.
 func NewPipelineContext(ctx context.Context, log *slog.Logger, registryName, pkg, version, artifactID string) *PipelineContext {

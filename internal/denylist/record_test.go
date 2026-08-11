@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -85,6 +86,39 @@ func TestRecorderRecordsAllowlistedMiddleware(t *testing.T) {
 	got := f.recorded[0]
 	if got != want {
 		t.Errorf("Denial = %+v\nwant      %+v", got, want)
+	}
+}
+
+func TestRecorderUsesMetadataSha256(t *testing.T) {
+	f := &recorderFakeStore{}
+	hook := Recorder(f, fixedNow)
+
+	ctx := testPipelineCtx(t)
+	preset := strings.Repeat("cd", 32) // 64-hex string, != sha256("some-artifact-bytes")
+	ctx.Metadata["sha256"] = preset
+	hook(ctx, &pipeline.ValidationError{Middleware: "guarddog-scan", Err: errors.New("boom")})
+
+	if len(f.recorded) != 1 {
+		t.Fatalf("Record calls = %d want 1", len(f.recorded))
+	}
+	if got := f.recorded[0].Sha256; got != preset {
+		t.Errorf("Sha256 = %q, want preset %q (must read the stash, not recompute)", got, preset)
+	}
+}
+
+func TestRecorderFallbackHashesWhenMetadataAbsent(t *testing.T) {
+	f := &recorderFakeStore{}
+	hook := Recorder(f, fixedNow)
+
+	ctx := testPipelineCtx(t) // no "sha256" metadata preset
+	hook(ctx, &pipeline.ValidationError{Middleware: "guarddog-scan", Err: errors.New("boom")})
+
+	if len(f.recorded) != 1 {
+		t.Fatalf("Record calls = %d want 1", len(f.recorded))
+	}
+	want := wantSha(t, ctx.Tarball.Bytes)
+	if got := f.recorded[0].Sha256; got != want {
+		t.Errorf("Sha256 = %q, want %q", got, want)
 	}
 }
 

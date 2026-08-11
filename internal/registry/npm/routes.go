@@ -139,15 +139,20 @@ func (a *npmAdapter) serveUntrusted(w http.ResponseWriter, r *http.Request, ctx 
 		a.fetchErr(w, r, err)
 		return
 	}
-	if err := rp.Validation.Run(ctx); err != nil {
-		a.fail(w, r, http.StatusForbidden, "validation rejected", err)
-		return
-	}
+	// Hash once, up front, so the validation chain (deny-list check/record) can
+	// read it from ctx.Metadata instead of recomputing the full tarball.
 	h, _, err := hash.Sha256Hex(bytes.NewReader(body))
 	if err != nil {
 		a.fail(w, r, http.StatusInternalServerError, "hash", err)
 		return
 	}
+	ctx.Metadata["sha256"] = h
+	if err := rp.Validation.Run(ctx); err != nil {
+		a.fail(w, r, http.StatusForbidden, "validation rejected", err)
+		return
+	}
+	h, _ = ctx.Sha256FromMetadata()
+	delete(ctx.Metadata, "sha256") // keep the persisted metadata blob byte-identical
 	rec := Record{
 		Name:           pkg,
 		Version:        version,
