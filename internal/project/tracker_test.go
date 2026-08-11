@@ -1,19 +1,25 @@
 package project
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"io"
 	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 )
 
-// fakeDependencyStore records the batches UpsertBatch receives.
+// fakeDependencyStore records the batches UpsertBatch receives. A non-nil err
+// makes UpsertBatch fail (after the batch is recorded), so a flusher flush error
+// can be simulated.
 type fakeDependencyStore struct {
 	mu      sync.Mutex
 	batches [][]DependencyRecord
 	upserts int
+	err     error
 }
 
 func (f *fakeDependencyStore) UpsertBatch(_ context.Context, recs []DependencyRecord) error {
@@ -22,7 +28,7 @@ func (f *fakeDependencyStore) UpsertBatch(_ context.Context, recs []DependencyRe
 	cp := append([]DependencyRecord(nil), recs...)
 	f.batches = append(f.batches, cp)
 	f.upserts++
-	return nil
+	return f.err
 }
 
 func (f *fakeDependencyStore) List(context.Context, string, DependencyListFilters) ([]DependencyRecord, error) {
@@ -37,6 +43,34 @@ func (f *fakeDependencyStore) snapshot() [][]DependencyRecord {
 
 func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+// syncBuffer is a bytes.Buffer safe for concurrent write (from the tracker's
+// goroutines) and read (from the test goroutine), so -race stays clean while
+// polling the captured log output.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// captureLogger returns a logger writing to a shared in-memory buffer, so tests
+// can assert on the tracker's log output.
+func captureLogger(t *testing.T) (*slog.Logger, *syncBuffer) {
+	t.Helper()
+	buf := &syncBuffer{}
+	return slog.New(slog.NewTextHandler(buf, nil)), buf
 }
 
 func eventually(t *testing.T, d time.Duration, cond func() bool) {
@@ -144,6 +178,9 @@ func TestTrackerDropPolicy(t *testing.T) {
 	if got := tr.dropped.Load(); got < 50 {
 		t.Fatalf("dropped = %d, want >= 50", got)
 	}
+	if got := tr.Dropped(); got < 50 {
+		t.Fatalf("Dropped() = %d, want >= 50", got)
+	}
 	// Track after Shutdown (closed flag set) must be a no-op, never a panic.
 	tr.closed.Store(true)
 	tr.Track(DependencyRecord{Pkg: "after-close"})
@@ -193,4 +230,76 @@ func TestTrackerNonBlockingTrack(t *testing.T) {
 		t.Fatalf("1000 Track calls took %s, want fast (non-blocking)", elapsed)
 	}
 	tr.closed.Store(true)
+}
+
+func TestTrackerFirstDropWarning(t *testing.T) {
+	// A hand-built tracker with a tiny buffer and NO flusher goroutine: every
+	// Track beyond the two slots drops on the full-buffer default path. The
+	// first drop after a clean interval must log exactly one warning; the rest
+	// stay silent.
+	log, buf := captureLogger(t)
+	tr := &Tracker{
+		cfg:   TrackerConfig{BatchSize: 100},
+		buf:   make(chan DependencyRecord, 2),
+		flush: make(chan struct{}, 1),
+		done:  make(chan struct{}),
+		log:   log,
+	}
+	tr.Track(DependencyRecord{Pkg: "a"})
+	tr.Track(DependencyRecord{Pkg: "b"})
+	for i := 0; i < 50; i++ {
+		tr.Track(DependencyRecord{Pkg: "flood"})
+	}
+	if got := buf.String(); !strings.Contains(got, "dependency tracker dropping records") {
+		t.Fatalf("buffer = %q, want first-drop warning", got)
+	}
+	if got := strings.Count(buf.String(), "dependency tracker dropping records"); got != 1 {
+		t.Fatalf("first-drop warning logged %d times, want exactly 1", got)
+	}
+	if got := tr.Dropped(); got < 50 {
+		t.Fatalf("Dropped() = %d, want >= 50", got)
+	}
+}
+
+func TestTrackerPeriodicDropSummary(t *testing.T) {
+	// A store that always fails: the flusher's failed flush drops the whole
+	// batch, and the periodic summary must report the drops since the last
+	// report.
+	store := &fakeDependencyStore{err: errors.New("boom")}
+	log, buf := captureLogger(t)
+	tr := NewTracker(store, TrackerConfig{BatchSize: 3, DropInterval: 10 * time.Millisecond}, log)
+	if err := tr.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tr.Shutdown(context.Background()) }()
+
+	for i := 0; i < 3; i++ {
+		tr.Track(DependencyRecord{Pkg: "pkg"})
+	}
+	eventually(t, time.Second, func() bool {
+		s := buf.String()
+		return strings.Contains(s, "dependency tracker dropping records") && strings.Contains(s, "drops since last report")
+	})
+	if got := buf.String(); !strings.Contains(got, "dropped_since_report=3") {
+		t.Fatalf("buffer = %q, want dropped_since_report=3", got)
+	}
+	if got := tr.Dropped(); got != 3 {
+		t.Fatalf("Dropped() = %d, want 3", got)
+	}
+}
+
+func TestTrackerPeriodicSummaryNoDropsNoLog(t *testing.T) {
+	// With no drops, the summary ticker must stay silent.
+	store := &fakeDependencyStore{}
+	log, buf := captureLogger(t)
+	tr := NewTracker(store, TrackerConfig{BatchSize: 100, DropInterval: 20 * time.Millisecond}, log)
+	if err := tr.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tr.Shutdown(context.Background()) }()
+
+	time.Sleep(60 * time.Millisecond)
+	if got := buf.String(); got != "" {
+		t.Fatalf("buffer = %q, want empty (no drops -> no logs)", got)
+	}
 }
