@@ -80,18 +80,26 @@ func (s *Server) Handler() http.Handler {
 		w.Header().Set("Content-Type", "text/plain")
 		_, _ = w.Write([]byte("ok"))
 	})
-	// The admin API is mounted on the same mux so the shared TokenAuth wrap
-	// below gates it. It is only present when a project store exists (db != nil);
-	// the dependency store is non-nil exactly then too.
+	// Two-tier auth: the outer TokenAuth below gates the registry routes with
+	// the shared package token, while /admin is exempted from it and gated
+	// instead by AdminTokenAuth with the dedicated auth.admin_token. A client
+	// authorized to pull packages therefore cannot mutate project configs or
+	// read dependency records. The admin API is only present when a project
+	// store exists (db != nil); the dependency store is non-nil exactly then too.
 	if s.projectStore != nil {
 		ah := admin.New(s.projectStore, s.depStore, adapterInvalidator{s.adapters}, s.logger, knownRegistryTypes(s.cfg))
-		mux.Handle("/admin/", http.StripPrefix("/admin", ah.Handler()))
+		adminMux := http.NewServeMux()
+		adminMux.Handle("/", http.StripPrefix("/admin", ah.Handler()))
+		mux.Handle("/admin/", AdminTokenAuth(s.cfg.Auth.AdminToken, s.logger, adminMux))
 	}
 	for _, a := range s.adapters {
 		prefix := strings.TrimRight(a.Prefix(), "/")
 		mux.Handle(prefix+"/", http.StripPrefix(prefix, a.Handler()))
 	}
-	exempt := func(p string) bool { return p == "/healthz" }
+	// /admin/ is exempt from the package token so it is gated ONLY by the admin
+	// token (the exempt predicate runs on r.URL.Path before StripPrefix, so it
+	// sees /admin/projects).
+	exempt := func(p string) bool { return p == "/healthz" || strings.HasPrefix(p, "/admin/") }
 	return TokenAuth(s.cfg.Auth.Token, exempt, s.logger, mux)
 }
 

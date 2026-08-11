@@ -170,6 +170,7 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.invalidator.Invalidate(key)
+	h.audit("create", key)
 	h.writeConfig(w, http.StatusCreated, cfg)
 }
 
@@ -260,6 +261,7 @@ func (h *Handler) put(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		h.invalidator.Invalidate(key)
+		h.audit("put", key)
 		h.writeConfig(w, http.StatusCreated, cfg)
 	case err != nil:
 		h.writeError(w, http.StatusInternalServerError, "store project")
@@ -269,6 +271,7 @@ func (h *Handler) put(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		h.invalidator.Invalidate(key)
+		h.audit("put", key)
 		h.writeConfig(w, http.StatusOK, cfg)
 	}
 }
@@ -292,10 +295,20 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.invalidator.Invalidate(key)
+	h.audit("delete", key)
 	w.WriteHeader(http.StatusNoContent)
 }
 
 // --- helpers ---
+
+// audit logs a successful admin mutation at info. It is called AFTER the
+// mutation is committed and the cache invalidated, never on error/409/404
+// paths, so the log reflects only applied changes.
+func (h *Handler) audit(op, key string) {
+	if h.logger != nil {
+		h.logger.Info("admin mutation", "op", op, "key", key)
+	}
+}
 
 // buildConfig validates the request's registry/middleware entries and converts
 // them into a project.ProjectConfig ready for the store. Middleware params are

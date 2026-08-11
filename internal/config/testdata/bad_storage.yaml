@@ -1,3 +1,5 @@
+auth:
+  admin_token: "change-me-admin"
 storage:
   type: sqlite
   dsn: "file:./db"

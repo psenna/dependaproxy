@@ -284,8 +284,9 @@ store.
 ### Admin REST API (`/admin`)
 
 Projects are managed at runtime through an authenticated REST API mounted at
-`/admin`, gated by the **same shared `auth.token`** as the registries (a
-dedicated admin token is a future hardening). Routes:
+`/admin`, gated by a **dedicated `auth.admin_token`** (privilege separation:
+the registry `auth.token` alone cannot mutate configs or read dependency
+records). Admin mutations (create/put/delete) are logged at info. Routes:
 
 | Method & path | Purpose |
 |---|---|
@@ -452,7 +453,7 @@ tests. The build is CGo-free except the race detector.
 - ☑ Projects: per-project configuration (`/p/<key>` routing, `PipelineContext.ProjectKey`, default-path backward compat)
 - ☑ Projects: project config store (postgres `projects` table) + `ProjectResolver` (cached, per-chain fallback to global, invalidated on admin write)
 - ☑ Projects: async/buffered dependency tracking + emit on serve (per-project SBOM; zero overhead on the default path)
-- ☑ Projects: admin REST API (`/admin/projects` CRUD + cache invalidation; shared `auth.token`)
+- ☑ Projects: admin REST API (`/admin/projects` CRUD + cache invalidation; dedicated `auth.admin_token`, mutations logged at info)
 - ☑ Projects: SBOM query API (`GET /admin/projects/{key}/dependencies` with server-side filters)
 - ☑ TDD: unit + per-adapter + multi-registry e2e + mutation contract; CI (vet/gofmt/golangci-lint/govulncheck/race+coverage)
 

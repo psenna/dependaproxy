@@ -30,10 +30,14 @@ type Server struct {
 	Addr string `yaml:"addr"`
 }
 
-// Auth holds the optional static bearer token (shared across all registries).
-// An empty token disables auth.
+// Auth holds the static bearer tokens. Token is shared across all registries
+// (an empty token disables registry auth); AdminToken gates the admin API at
+// /admin and is required whenever storage is configured (the admin API is
+// enabled then). The two must differ so a client authorized to pull packages
+// cannot mutate project configs.
 type Auth struct {
-	Token string `yaml:"token"`
+	Token      string `yaml:"token"`
+	AdminToken string `yaml:"admin_token"`
 }
 
 // Storage is the shared persistence backend config. v2 only supports postgres.
@@ -117,6 +121,11 @@ func (c *Config) Validate() error {
 
 	if c.Storage.Type != "postgres" {
 		errs = append(errs, fmt.Sprintf("storage.type must be %q for v2 (got %q)", "postgres", c.Storage.Type))
+	}
+	if c.Auth.AdminToken == "" {
+		errs = append(errs, "auth.admin_token is required (the admin API at /admin is enabled when storage is configured); set a distinct token to harden admin mutations")
+	} else if c.Auth.Token != "" && c.Auth.AdminToken == c.Auth.Token {
+		errs = append(errs, "auth.admin_token must differ from auth.token (privilege separation)")
 	}
 	if len(c.Registries) == 0 {
 		errs = append(errs, "at least one registry is required")

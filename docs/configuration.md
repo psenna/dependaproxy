@@ -18,6 +18,7 @@ to get started; the full file is linked at the bottom.
 |---|---|
 | `server.addr` | HTTP listen address (default `:8080`). |
 | `auth.token` | Static bearer token shared across all registries. Empty disables auth (local dev only). |
+| `auth.admin_token` | Dedicated token for the admin API at `/admin` (project config mutations + dependency records). Required when storage is configured; must differ from `auth.token` (privilege separation). Admin mutations are logged at info. |
 | `storage.type` / `storage.dsn` | Shared PostgreSQL (one pool; each adapter owns its table). |
 | `log.level` / `log.format` | `debug\|info\|warn\|error` and `json\|text`. |
 | `registries[]` | One entry per registry: `{type, prefix, upstream, validation[], retrieval[], mutation[]}`. |
