@@ -31,6 +31,9 @@ func TestLoadMulti(t *testing.T) {
 	if c.Auth.Token != "change-me" {
 		t.Errorf("auth.token = %q", c.Auth.Token)
 	}
+	if c.Auth.AdminToken != "change-me-admin" {
+		t.Errorf("auth.admin_token = %q", c.Auth.AdminToken)
+	}
 	if c.Storage.Type != "postgres" || c.Storage.DSN == "" {
 		t.Errorf("storage = %+v", c.Storage)
 	}
@@ -109,6 +112,12 @@ func TestExampleConfigParses(t *testing.T) {
 	if len(gop.Retrieval) != 2 || gop.Retrieval[0].Type != "local-disk-cache" || gop.Retrieval[1].Type != "upstream-registry" {
 		t.Errorf("goproxy retrieval = %+v", gop.Retrieval)
 	}
+	if c.Auth.AdminToken == "" {
+		t.Error("auth.admin_token must be set in config.example.yaml")
+	}
+	if c.Auth.Token != "" && c.Auth.AdminToken == c.Auth.Token {
+		t.Error("auth.admin_token must differ from auth.token (privilege separation)")
+	}
 }
 
 func TestDuplicatePrefix(t *testing.T)     { wantErr(t, "dup_prefix.yaml", "duplicate prefix") }
@@ -117,6 +126,14 @@ func TestBadStorage(t *testing.T)          { wantErr(t, "bad_storage.yaml", "pos
 func TestMissingUpstream(t *testing.T)     { wantErr(t, "missing_upstream.yaml", "upstream is required") }
 func TestEmptyMiddlewareType(t *testing.T) { wantErr(t, "empty_type.yaml", "type is required") }
 func TestBadAllowedHost(t *testing.T)      { wantErr(t, "bad_allowed_host.yaml", "allowed_upstream_hosts") }
+
+func TestAdminTokenRequired(t *testing.T) {
+	wantErr(t, "no_admin_token.yaml", "auth.admin_token is required")
+}
+
+func TestAdminTokenEqualsToken(t *testing.T) {
+	wantErr(t, "admin_token_equals_token.yaml", "auth.admin_token must differ from auth.token")
+}
 
 func TestDefaults(t *testing.T) {
 	c := mustLoad(t, "multi.yaml")

@@ -1,7 +1,6 @@
-server:
-  addr: ":8080"
 auth:
-  admin_token: "change-me-admin"
+  token: "change-me"
+  admin_token: "change-me"
 storage:
   type: postgres
   dsn: "postgres://u:p@host:5432/db?sslmode=disable"
@@ -9,5 +8,5 @@ registries:
   - type: npm
     prefix: /npm
     upstream: https://registry.npmjs.org
-    allowed_upstream_hosts:
-      - "https://cdn.example.com"
+    retrieval:
+      - type: upstream-registry

@@ -483,7 +483,7 @@ func TestGoproxyE2EProjectScopedTrackingPostgres(t *testing.T) {
 	up, _ := newUpstream(t)
 	cacheDir := t.TempDir()
 	cfg := &config.Config{
-		Auth:    config.Auth{Token: "tok"},
+		Auth:    config.Auth{Token: "tok", AdminToken: "admintok"},
 		Storage: config.Storage{Type: "postgres", DSN: dsn},
 		Log:     config.Log{Level: "warn", Format: "json"},
 		Registries: []config.RegistryConfig{
@@ -519,7 +519,7 @@ func TestGoproxyE2EProjectScopedTrackingPostgres(t *testing.T) {
 
 	// Create project acme with no registry overrides (empty registries map), so it
 	// falls back to the global goproxy pipelines (min-publication-age min_days 0).
-	if code, respBody := authedDo(t, httpSrv.URL, http.MethodPost, "/admin/projects", `{"key":"acme","registries":{}}`, "tok"); code != http.StatusCreated {
+	if code, respBody := authedDo(t, httpSrv.URL, http.MethodPost, "/admin/projects", `{"key":"acme","registries":{}}`, "admintok"); code != http.StatusCreated {
 		t.Fatalf("create project: code=%d want 201, body=%s", code, respBody)
 	}
 

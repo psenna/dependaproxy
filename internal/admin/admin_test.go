@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -539,5 +540,38 @@ func TestAdminDependenciesStoreError(t *testing.T) {
 	rr := doJSON(h, http.MethodGet, "/projects/acme/dependencies", "")
 	if rr.Code != http.StatusInternalServerError {
 		t.Fatalf("code=%d want 500, body=%s", rr.Code, rr.Body.String())
+	}
+}
+
+// TestAdminAuditLog asserts successful create/put/delete mutations are logged at
+// info with op/key, and that error paths (a 409 duplicate create) are not.
+func TestAdminAuditLog(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	store := newFakeStore()
+	inv := &fakeInvalidator{}
+	h := New(store, &fakeDependencyStore{}, inv, logger, []string{"npm", "pypi"}).Handler()
+
+	// create -> 201, audited.
+	doJSON(h, http.MethodPost, "/projects", `{"key":"acme","registries":{"npm":{}}}`)
+	// duplicate create -> 409, must NOT audit.
+	doJSON(h, http.MethodPost, "/projects", `{"key":"acme","registries":{"npm":{}}}`)
+	// put (replace) -> 200, audited.
+	doJSON(h, http.MethodPut, "/projects/acme", `{"registries":{"npm":{}}}`)
+	// delete -> 204, audited.
+	doJSON(h, http.MethodDelete, "/projects/acme", "")
+
+	out := buf.String()
+	for _, want := range []string{
+		`msg="admin mutation" op=create key=acme`,
+		`msg="admin mutation" op=put key=acme`,
+		`msg="admin mutation" op=delete key=acme`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("audit log missing %q; got:\n%s", want, out)
+		}
+	}
+	if n := strings.Count(out, "op=create"); n != 1 {
+		t.Errorf("create audited %d times, want 1 (409 must not audit); got:\n%s", n, out)
 	}
 }

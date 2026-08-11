@@ -11,6 +11,12 @@ server:
 # `Authorization: Bearer <token>`. Empty/omit to disable auth (local dev only).
 auth:
   token: "change-me"
+  # Dedicated token for the admin API at /admin (project config mutations +
+  # dependency records). REQUIRED when storage is configured. Privilege
+  # separation: a client holding only `token` can pull packages but cannot
+  # mutate configs. Must differ from `token`. Clients send
+  # `Authorization: Bearer <admin_token>`.
+  admin_token: "change-me-admin"
 
 # Shared PostgreSQL backend (one pool; each adapter owns its table).
 storage:
@@ -206,9 +212,10 @@ registries:
 # Projects (per-project configuration + SBOM)
 # ---------------------------------------------------------------------------
 # Projects are NOT defined in this static file — they are managed at runtime
-# through the authenticated admin REST API at /admin (gated by the same
-# `auth.token` above; a dedicated admin token is a future hardening). See
-# README "Projects" for the full route list.
+# through the authenticated admin REST API at /admin, gated by the dedicated
+# `auth.admin_token` above (NOT the registry `auth.token`). Admin mutations
+# (create/put/delete) are logged at info. See README "Projects" for the full
+# route list.
 #
 # A project lets a consuming codebase override the GLOBAL per-registry
 # middleware config above by passing a project key in the URL:

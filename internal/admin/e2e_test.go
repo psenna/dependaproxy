@@ -123,7 +123,7 @@ func TestAdminE2EInvalidation(t *testing.T) {
 
 	cacheDir := t.TempDir()
 	cfg := &config.Config{
-		Auth:    config.Auth{Token: "tok"},
+		Auth:    config.Auth{Token: "tok", AdminToken: "admintok"},
 		Storage: config.Storage{Type: "postgres", DSN: dsn},
 		Log:     config.Log{Level: "warn", Format: "json"},
 		Registries: []config.RegistryConfig{
@@ -164,7 +164,7 @@ func TestAdminE2EInvalidation(t *testing.T) {
 
 	// 2. Create project acme with npm validation = cve-check warn -> 201.
 	createBody := fmt.Sprintf(`{"key":"acme","registries":{"npm":{"validation":[{"type":"cve-check","params":{"endpoint":%q,"mode":"warn"}}]}}}`, osvSrv.URL)
-	code, respBody := doAdmin(httpSrv.URL, http.MethodPost, "/admin/projects", createBody, "tok")
+	code, respBody := doAdmin(httpSrv.URL, http.MethodPost, "/admin/projects", createBody, "admintok")
 	if code != http.StatusCreated {
 		t.Fatalf("create project: code=%d want 201, body=%s", code, respBody)
 	}
@@ -177,7 +177,7 @@ func TestAdminE2EInvalidation(t *testing.T) {
 
 	// 4. Update project to deny -> 200 (must Invalidate("acme")).
 	updateBody := fmt.Sprintf(`{"registries":{"npm":{"validation":[{"type":"cve-check","params":{"endpoint":%q,"mode":"deny"}}]}}}`, osvSrv.URL)
-	code, respBody = doAdmin(httpSrv.URL, http.MethodPut, "/admin/projects/acme", updateBody, "tok")
+	code, respBody = doAdmin(httpSrv.URL, http.MethodPut, "/admin/projects/acme", updateBody, "admintok")
 	if code != http.StatusOK {
 		t.Fatalf("update project: code=%d want 200, body=%s", code, respBody)
 	}
@@ -190,7 +190,7 @@ func TestAdminE2EInvalidation(t *testing.T) {
 	}
 
 	// 6. Delete project -> 204 (Invalidate again).
-	if code, _ := doAdmin(httpSrv.URL, http.MethodDelete, "/admin/projects/acme", "", "tok"); code != http.StatusNoContent {
+	if code, _ := doAdmin(httpSrv.URL, http.MethodDelete, "/admin/projects/acme", "", "admintok"); code != http.StatusNoContent {
 		t.Fatalf("delete project: code=%d want 204", code)
 	}
 
@@ -199,12 +199,18 @@ func TestAdminE2EInvalidation(t *testing.T) {
 		t.Fatalf("fallback to global: code=%d want 403", code)
 	}
 
-	// 8. Unauthenticated admin calls -> 401 (shared token gate).
+	// 8. Unauthenticated admin calls -> 401 (admin token gate).
 	if code, _ := doAdmin(httpSrv.URL, http.MethodPost, "/admin/projects", `{"key":"x"}`, ""); code != http.StatusUnauthorized {
 		t.Fatalf("POST /admin/projects no auth: code=%d want 401", code)
 	}
 	if code, _ := doAdmin(httpSrv.URL, http.MethodGet, "/admin/projects", "", ""); code != http.StatusUnauthorized {
 		t.Fatalf("GET /admin/projects no auth: code=%d want 401", code)
+	}
+
+	// 9. Privilege separation: the PACKAGE token "tok" (valid for /npm) is
+	// rejected on /admin — only the admin token can mutate configs.
+	if code, _ := doAdmin(httpSrv.URL, http.MethodGet, "/admin/projects", "", "tok"); code != http.StatusUnauthorized {
+		t.Fatalf("GET /admin/projects with package token: code=%d want 401", code)
 	}
 }
 
@@ -284,7 +290,7 @@ func TestAdminE2EDependencies(t *testing.T) {
 
 	cacheDir := t.TempDir()
 	cfg := &config.Config{
-		Auth:    config.Auth{Token: "tok"},
+		Auth:    config.Auth{Token: "tok", AdminToken: "admintok"},
 		Storage: config.Storage{Type: "postgres", DSN: dsn},
 		Log:     config.Log{Level: "warn", Format: "json"},
 		Registries: []config.RegistryConfig{
@@ -320,7 +326,7 @@ func TestAdminE2EDependencies(t *testing.T) {
 
 	// 1. Create project acme with npm validation = cve-check warn -> 201.
 	createBody := fmt.Sprintf(`{"key":"acme","registries":{"npm":{"validation":[{"type":"cve-check","params":{"endpoint":%q,"mode":"warn"}}]}}}`, osvSrv.URL)
-	code, respBody := doAdmin(httpSrv.URL, http.MethodPost, "/admin/projects", createBody, "tok")
+	code, respBody := doAdmin(httpSrv.URL, http.MethodPost, "/admin/projects", createBody, "admintok")
 	if code != http.StatusCreated {
 		t.Fatalf("create project: code=%d want 201, body=%s", code, respBody)
 	}
@@ -338,7 +344,7 @@ func TestAdminE2EDependencies(t *testing.T) {
 	// tracker field is unexported, so poll the endpoint).
 	deadline := time.Now().Add(10 * time.Second)
 	for {
-		code, respBody = getPath(httpSrv.URL, "/admin/projects/acme/dependencies", "tok")
+		code, respBody = getPath(httpSrv.URL, "/admin/projects/acme/dependencies", "admintok")
 		if code == http.StatusOK {
 			break
 		}
@@ -364,21 +370,21 @@ func TestAdminE2EDependencies(t *testing.T) {
 	}
 
 	// 4. registry=npm filter -> 200, only npm rows.
-	code, respBody = getPath(httpSrv.URL, "/admin/projects/acme/dependencies?registry=npm", "tok")
+	code, respBody = getPath(httpSrv.URL, "/admin/projects/acme/dependencies?registry=npm", "admintok")
 	if code != http.StatusOK {
 		t.Fatalf("filter registry=npm: code=%d want 200, body=%s", code, respBody)
 	}
 	assertAllRegistry(t, respBody, "npm")
 
 	// 5. pkg=sbom-alpha filter -> 200, only that package.
-	code, respBody = getPath(httpSrv.URL, "/admin/projects/acme/dependencies?pkg=sbom-alpha", "tok")
+	code, respBody = getPath(httpSrv.URL, "/admin/projects/acme/dependencies?pkg=sbom-alpha", "admintok")
 	if code != http.StatusOK {
 		t.Fatalf("filter pkg=sbom-alpha: code=%d want 200, body=%s", code, respBody)
 	}
 	assertAllPkg(t, respBody, "sbom-alpha")
 
 	// 6. registry=pypi filter -> 404 (empty result for an unknown registry).
-	if code, _ := getPath(httpSrv.URL, "/admin/projects/acme/dependencies?registry=pypi", "tok"); code != http.StatusNotFound {
+	if code, _ := getPath(httpSrv.URL, "/admin/projects/acme/dependencies?registry=pypi", "admintok"); code != http.StatusNotFound {
 		t.Fatalf("filter registry=pypi: code=%d want 404", code)
 	}
 }

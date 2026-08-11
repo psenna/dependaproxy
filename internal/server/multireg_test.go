@@ -68,7 +68,7 @@ func TestMultiRegistryE2E(t *testing.T) {
 
 	cacheDir := t.TempDir()
 	cfg := &config.Config{
-		Auth:    config.Auth{Token: "tok"},
+		Auth:    config.Auth{Token: "tok", AdminToken: "admintok"},
 		Storage: config.Storage{Type: "postgres", DSN: dsn},
 		Log:     config.Log{Level: "warn", Format: "json"},
 		Registries: []config.RegistryConfig{

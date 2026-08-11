@@ -1,3 +1,5 @@
+auth:
+  admin_token: "change-me-admin"
 storage:
   type: postgres
   dsn: "postgres://u:p@host:5432/db?sslmode=disable"

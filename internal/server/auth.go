@@ -32,20 +32,9 @@ func TokenAuth(token string, exempt func(string) bool, log *slog.Logger, next ht
 			next.ServeHTTP(w, r)
 			return
 		}
-		provided := r.Header.Get("Authorization")
-		var cred string
-		switch {
-		case strings.HasPrefix(provided, bearerPrefix):
-			cred = provided[len(bearerPrefix):]
-		case strings.HasPrefix(provided, basicPrefix):
-			_, pass, ok := r.BasicAuth()
-			if !ok {
-				unauthorized(w, log, r, "malformed basic auth")
-				return
-			}
-			cred = pass
-		default:
-			unauthorized(w, log, r, "missing or unsupported Authorization header")
+		cred, reason, ok := extractCred(r)
+		if !ok {
+			unauthorized(w, log, r, reason)
 			return
 		}
 		if subtle.ConstantTimeCompare([]byte(cred), []byte(token)) != 1 {
@@ -56,13 +45,39 @@ func TokenAuth(token string, exempt func(string) bool, log *slog.Logger, next ht
 	})
 }
 
+// extractCred pulls the bearer or basic credential out of the request's
+// Authorization header. It returns ok=false (with a reason) when the header is
+// missing, malformed, or uses an unsupported scheme. Shared by TokenAuth and
+// AdminTokenAuth so both accept the same credential forms.
+func extractCred(r *http.Request) (cred, reason string, ok bool) {
+	provided := r.Header.Get("Authorization")
+	switch {
+	case strings.HasPrefix(provided, bearerPrefix):
+		return provided[len(bearerPrefix):], "", true
+	case strings.HasPrefix(provided, basicPrefix):
+		_, pass, ok := r.BasicAuth()
+		if !ok {
+			return "", "malformed basic auth", false
+		}
+		return pass, "", true
+	default:
+		return "", "missing or unsupported Authorization header", false
+	}
+}
+
 func unauthorized(w http.ResponseWriter, log *slog.Logger, r *http.Request, reason string) {
+	unauthorizedRealm(w, log, r, reason, `Bearer realm="dependaproxy", Basic realm="dependaproxy"`)
+}
+
+// unauthorizedRealm writes the 401 with the given WWW-Authenticate realm and
+// logs the rejection at warn (path + reason; the credential is never logged).
+func unauthorizedRealm(w http.ResponseWriter, log *slog.Logger, r *http.Request, reason, realm string) {
 	if log != nil {
 		log.Warn("auth rejected",
 			"path", r.URL.Path,
 			"reason", reason,
 		)
 	}
-	w.Header().Set("WWW-Authenticate", `Bearer realm="dependaproxy", Basic realm="dependaproxy"`)
+	w.Header().Set("WWW-Authenticate", realm)
 	http.Error(w, "unauthorized", http.StatusUnauthorized)
 }
