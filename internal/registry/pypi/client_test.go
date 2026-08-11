@@ -54,6 +54,33 @@ func TestFetchIndex(t *testing.T) {
 	}
 }
 
+func TestFetchIndexRequestsJSON(t *testing.T) {
+	// The real upstream (pypi.org/simple) returns HTML unless the request
+	// advertises the PEP 691 JSON media type. FetchIndex must send the Accept
+	// header or the JSON decode fails (regression: it previously did not).
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Accept") != acceptJSON {
+			w.Header().Set("Content-Type", "text/html")
+			_, _ = io.WriteString(w, "<html>not json</html>")
+			return
+		}
+		w.Header().Set("Content-Type", acceptJSON)
+		_, _ = io.WriteString(w, indexJSON)
+	}))
+	defer srv.Close()
+	c, err := New(srv.URL+"/simple", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := c.FetchIndex(context.Background(), "testpkg")
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	if p.Name != "testpkg" || len(p.Files) != 1 {
+		t.Fatalf("project = %+v", p)
+	}
+}
+
 func TestFetchIndexRaw(t *testing.T) {
 	srv := newUpstream(t)
 	c, _ := New(srv.URL+"/simple", nil, nil)

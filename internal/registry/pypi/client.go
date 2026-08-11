@@ -79,15 +79,16 @@ func (c *Client) do(ctx context.Context, target string) (*http.Response, error) 
 	return resp, nil
 }
 
-// FetchIndex decodes the trimmed project model as PEP 691 JSON.
+// FetchIndex decodes the trimmed project model as PEP 691 JSON. The upstream
+// simple index returns HTML by default, so the request must advertise the JSON
+// media type via the Accept header (FetchIndexRaw does this).
 func (c *Client) FetchIndex(ctx context.Context, name string) (*Project, error) {
-	resp, err := c.do(ctx, c.indexURL(name))
+	body, _, err := c.FetchIndexRaw(ctx, name, acceptJSON)
 	if err != nil {
 		return nil, err
 	}
-	defer closeQuiet(resp.Body)
 	var p Project
-	if err := json.NewDecoder(resp.Body).Decode(&p); err != nil {
+	if err := json.Unmarshal(body, &p); err != nil {
 		return nil, fmt.Errorf("pypi: decode index %s: %w", name, err)
 	}
 	return &p, nil

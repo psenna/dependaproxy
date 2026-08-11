@@ -88,6 +88,13 @@ func (a *pypiAdapter) handleFile(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, r, http.StatusNotFound, "not found")
 		return
 	}
+	// PEP 658 metadata files (X.whl.metadata / X.tar.gz.metadata) are not listed
+	// in the simple index and are not served by the proxy. 404 so pip falls back
+	// to downloading the distribution and reading its metadata from it.
+	if strings.HasSuffix(filename, ".metadata") {
+		a.fail(w, r, http.StatusNotFound, "metadata not served")
+		return
+	}
 	// Security boundary (issue #116): a filename that cannot be parsed to a
 	// version is served by no route — the index rewrite maps it to the "_"
 	// sentinel version, and this gate 404s it here. Re-parse the filename
@@ -326,6 +333,12 @@ func rewriteIndexJSON(raw []byte, base, name string) ([]byte, error) {
 			ver = unparseableVersion
 		}
 		m["url"] = base + "/files/" + name + "/" + ver + "/" + url.PathEscape(fn)
+		// The proxy does not serve PEP 658 metadata files (X.whl.metadata), so
+		// drop the advertisement to make pip download the distribution directly
+		// and read its metadata from it. The JSON simple index advertises it as
+		// data-dist-info-metadata (PEP 691); core-metadata is a legacy alias.
+		delete(m, "data-dist-info-metadata")
+		delete(m, "core-metadata")
 	}
 	return json.Marshal(doc)
 }
