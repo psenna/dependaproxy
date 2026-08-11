@@ -16,7 +16,6 @@ import (
 	"github.com/psenna/dependaproxy/internal/middleware/retrieval/localcache"
 	"github.com/psenna/dependaproxy/internal/middleware/retrieval/s3cache"
 	"github.com/psenna/dependaproxy/internal/middleware/validation/cve"
-	"github.com/psenna/dependaproxy/internal/middleware/validation/malware"
 	"github.com/psenna/dependaproxy/internal/pipeline"
 	"github.com/psenna/dependaproxy/internal/project"
 	"gopkg.in/yaml.v3"
@@ -68,7 +67,6 @@ func TestProjectResolveDenyVsWarn(t *testing.T) {
 	reg := pipeline.NewRegistry()
 	reg.RegisterValidation("min-publication-age", MinPubFactory)
 	reg.RegisterValidation("cve-check", cve.Factory)
-	reg.RegisterValidation("malware-scan", malware.Factory)
 	reg.RegisterRetrieval("cve-check-retrieval", cverecheck.Factory)
 	reg.RegisterRetrieval("local-disk-cache", localcache.Factory)
 	reg.RegisterRetrieval("s3-cache", s3cache.Factory)
