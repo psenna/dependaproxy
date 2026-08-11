@@ -53,10 +53,20 @@ func main() {
 	// early returns between here and the listener).
 	defer func() { _ = srv.Shutdown(context.Background()) }()
 
+	// Hardening against slow-loris / resource-holding (issue #121). Request
+	// bodies here are small (GET artifact fetches, small admin POSTs), so the
+	// read side is bounded tightly. WriteTimeout stays generous because artifact
+	// responses are served from memory with no size cap yet (issue #111) — a
+	// too-low value would drop legitimate slow downloads. IdleTimeout reaps idle
+	// keepalive connections; MaxHeaderBytes bounds header size.
 	httpSrv := &http.Server{
 		Addr:              cfg.Server.Addr,
 		Handler:           srv.Handler(),
+		ReadTimeout:       30 * time.Second,
 		ReadHeaderTimeout: 10 * time.Second,
+		WriteTimeout:      10 * time.Minute,
+		IdleTimeout:       2 * time.Minute,
+		MaxHeaderBytes:    1 << 20, // 1 MiB
 	}
 
 	go func() {
