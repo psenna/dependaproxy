@@ -163,6 +163,36 @@ func TestValidatePassesProjectKeyAndHash(t *testing.T) {
 	}
 }
 
+func TestValidateUsesMetadataSha256(t *testing.T) {
+	st := &fakeStore{ok: false}
+	mw := build(t, st, yaml.Node{})
+	ctx := testCtx()
+	preset := strings.Repeat("ab", 32) // 64-hex string, != sha256("artifact-bytes")
+	ctx.Metadata["sha256"] = preset
+	if err := mw.Validate(ctx); err != nil {
+		t.Fatalf("Validate = %v, want nil", err)
+	}
+	if st.gotSha != preset {
+		t.Errorf("lookup sha256 = %q, want preset %q (must read the stash, not recompute)", st.gotSha, preset)
+	}
+}
+
+func TestValidateFallbackHashesWhenMetadataAbsent(t *testing.T) {
+	st := &fakeStore{ok: false}
+	mw := build(t, st, yaml.Node{})
+	ctx := testCtx() // no "sha256" metadata preset
+	if err := mw.Validate(ctx); err != nil {
+		t.Fatalf("Validate = %v, want nil", err)
+	}
+	want, _, err := hash.Sha256Hex(bytes.NewReader(ctx.Tarball.Bytes))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.gotSha != want {
+		t.Errorf("lookup sha256 = %q, want %q", st.gotSha, want)
+	}
+}
+
 func TestValidateDisabled(t *testing.T) {
 	st := &fakeStore{reason: "blocked", ok: true}
 	mw := build(t, st, paramsNode(t, "enabled: false"))
