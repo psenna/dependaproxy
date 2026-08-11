@@ -56,7 +56,7 @@ func New(ctx context.Context, cfg *config.Config, db *sql.DB) (*Server, error) {
 			return nil, fmt.Errorf("open dependency store: %w", err)
 		}
 		depStore = ds
-		tracker = project.NewTracker(depStore, project.TrackerConfig{FlushInterval: 5 * time.Second, BatchSize: 100}, logger)
+		tracker = project.NewTracker(depStore, project.TrackerConfig{FlushInterval: 5 * time.Second, DropInterval: 5 * time.Second, BatchSize: 100}, logger)
 		if err := tracker.Start(ctx); err != nil {
 			return nil, fmt.Errorf("start dependency tracker: %w", err)
 		}
