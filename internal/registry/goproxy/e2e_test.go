@@ -23,7 +23,6 @@ import (
 	"github.com/psenna/dependaproxy/internal/middleware/retrieval/localcache"
 	"github.com/psenna/dependaproxy/internal/middleware/retrieval/s3cache"
 	"github.com/psenna/dependaproxy/internal/middleware/validation/cve"
-	"github.com/psenna/dependaproxy/internal/middleware/validation/malware"
 	"github.com/psenna/dependaproxy/internal/pipeline"
 	"github.com/psenna/dependaproxy/internal/project"
 	"github.com/psenna/dependaproxy/internal/server"
@@ -31,9 +30,9 @@ import (
 )
 
 // newE2EAdapter builds a goproxyAdapter wired to a REAL goproxy client and the
-// full v1 middleware set (min-publication-age, cve-check, malware-scan,
-// cve-check-retrieval, local-disk-cache, s3-cache, upstream-registry, noop
-// mutation), so the e2e tests drive the real request/retrieval/validation flow
+// full v1 middleware set (min-publication-age, cve-check, cve-check-retrieval,
+// local-disk-cache, s3-cache, upstream-registry, noop mutation), so the e2e
+// tests drive the real request/retrieval/validation flow
 // against an httptest upstream. The config-driven goproxy.Factory is NOT used
 // here because it needs a *sql.DB (OpenStorage); the postgres-gated sub-test
 // exercises the real Factory via server.New.
@@ -47,7 +46,6 @@ func newE2EAdapter(t *testing.T, prefix, upstream string, store Store, dir strin
 	reg := pipeline.NewRegistry()
 	reg.RegisterValidation("min-publication-age", MinPubFactory)
 	reg.RegisterValidation("cve-check", cve.Factory)
-	reg.RegisterValidation("malware-scan", malware.Factory)
 	reg.RegisterRetrieval("cve-check-retrieval", cverecheck.Factory)
 	reg.RegisterRetrieval("local-disk-cache", localcache.Factory)
 	reg.RegisterRetrieval("s3-cache", s3cache.Factory)

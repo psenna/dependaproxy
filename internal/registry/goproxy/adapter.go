@@ -11,7 +11,6 @@ import (
 	"github.com/psenna/dependaproxy/internal/middleware/retrieval/localcache"
 	"github.com/psenna/dependaproxy/internal/middleware/retrieval/s3cache"
 	"github.com/psenna/dependaproxy/internal/middleware/validation/cve"
-	"github.com/psenna/dependaproxy/internal/middleware/validation/malware"
 	"github.com/psenna/dependaproxy/internal/pipeline"
 	"github.com/psenna/dependaproxy/internal/project"
 )
@@ -19,8 +18,11 @@ import (
 func init() { adapter.Register("goproxy", Factory) }
 
 // Factory builds the goproxy adapter from its RegistryConfig + shared Deps.
-// The validation chain supports min-publication-age, cve-check (mapped to OSV's
-// "Go" ecosystem) and malware-scan; the retrieval chain supports
+// The validation chain supports min-publication-age and cve-check (mapped to
+// OSV's "Go" ecosystem). malware-scan is intentionally NOT registered for
+// goproxy: the static heuristics only understand npm/pypi artifacts, so a
+// config listing it here would otherwise be a silent no-op — better to fail
+// loudly at build time (issue #119). The retrieval chain supports
 // cve-check-retrieval, the local-disk/s3 caches and the terminal
 // upstream-registry (which stashes the *Info in ctx.Index for
 // min-publication-age). The mutation chain defaults to a single NoOp so the
@@ -43,7 +45,6 @@ func Factory(cfg config.RegistryConfig, deps adapter.Deps) (adapter.Adapter, err
 	reg.RegisterValidation("deny-list-check", denylist.Factory(denyStore))
 	reg.RegisterValidation("min-publication-age", MinPubFactory)
 	reg.RegisterValidation("cve-check", cve.Factory)
-	reg.RegisterValidation("malware-scan", malware.Factory)
 	reg.RegisterRetrieval("cve-check-retrieval", cverecheck.Factory)
 	reg.RegisterRetrieval("local-disk-cache", localcache.Factory)
 	reg.RegisterRetrieval("s3-cache", s3cache.Factory)
