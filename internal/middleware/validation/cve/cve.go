@@ -9,7 +9,10 @@
 //
 // The OSV client, bounded TTL cache and query/deny-message helpers live in
 // internal/middleware/cveosv and are shared with the retrieval-stage
-// cve-check-retrieval middleware (same endpoint + cache logic).
+// cve-check-retrieval middleware (same endpoint + cache logic). When built via
+// the adapter's FactoryWithClient, the client and its cache are shared per
+// adapter with the retrieval middleware, so an untrusted request that runs both
+// stages queries OSV once per (ecosystem,name,version).
 package cve
 
 import (
@@ -119,6 +122,29 @@ var Factory pipeline.ValidationFactory = func(p yaml.Node) (pipeline.ValidationM
 		}
 	}
 	return New(pr, nil, nil), nil
+}
+
+// FactoryWithClient builds the middleware from its raw params node against a
+// pre-built shared cveosv.Client, so the client and its cache are shared per
+// adapter with the retrieval-stage cve-check-retrieval middleware. Only
+// mode/on_error are taken from the params; endpoint/httpClient/cache come from
+// the shared client. Adapters register this under "cve-check".
+func FactoryWithClient(shared *cveosv.Client) pipeline.ValidationFactory {
+	return func(p yaml.Node) (pipeline.ValidationMiddleware, error) {
+		var pr params
+		if !p.IsZero() {
+			if err := p.Decode(&pr); err != nil {
+				return nil, fmt.Errorf("cve-check: decode params: %w", err)
+			}
+		}
+		return &Middleware{
+			endpoint: shared.Endpoint(),
+			mode:     cveosv.DefaultedMode(pr.Mode),
+			onError:  cveosv.DefaultedOnError(pr.OnError),
+			client:   shared,
+			cache:    shared.Cache(),
+		}, nil
+	}
 }
 
 // New constructs a cve-check middleware with injectable client and clock for

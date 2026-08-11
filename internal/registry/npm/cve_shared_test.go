@@ -1,0 +1,139 @@
+package npm
+
+import (
+	"encoding/json"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/psenna/dependaproxy/internal/config"
+	"github.com/psenna/dependaproxy/internal/middleware/cveosv"
+	"github.com/psenna/dependaproxy/internal/middleware/mutation"
+	"github.com/psenna/dependaproxy/internal/middleware/retrieval/cverecheck"
+	"github.com/psenna/dependaproxy/internal/middleware/retrieval/localcache"
+	"github.com/psenna/dependaproxy/internal/middleware/validation/cve"
+	"github.com/psenna/dependaproxy/internal/pipeline"
+	"github.com/psenna/dependaproxy/internal/project"
+)
+
+// countingOSV is a fake OSV endpoint returning the given vuln list for any
+// query and counting how many times it is hit.
+func countingOSV(t *testing.T, vulns []cveosv.Vuln) (*httptest.Server, *atomic.Int64) {
+	t.Helper()
+	var hits atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		if r.URL.Path != "/v1/query" {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		var req cveosv.QueryRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(cveosv.QueryResponse{Vulns: vulns})
+	}))
+	t.Cleanup(srv.Close)
+	return srv, &hits
+}
+
+// newSharedCveAdapter builds the npm adapter with BOTH the validation cve-check
+// and the retrieval cve-check-retrieval middlewares sharing one cveosv.Client
+// (mirroring the adapter Factory), so a single request that runs both stages
+// must query OSV exactly once. valMode/retMode select each middleware's mode.
+func newSharedCveAdapter(t *testing.T, osvURL, valMode, retMode string, client RegistryClient, store Store) *npmAdapter {
+	t.Helper()
+	dir := t.TempDir()
+	shared := cveosv.NewClient(cveosv.Params{Endpoint: osvURL, CacheTTL: time.Hour}, nil, func() time.Time { return time.Now().UTC() })
+
+	reg := pipeline.NewRegistry()
+	reg.RegisterValidation("min-publication-age", MinPubFactory)
+	reg.RegisterValidation("cve-check", cve.FactoryWithClient(shared))
+	reg.RegisterRetrieval("cve-check-retrieval", cverecheck.FactoryWithClient(shared))
+	reg.RegisterRetrieval("local-disk-cache", localcache.Factory)
+	reg.RegisterRetrieval("upstream-registry", UpstreamFactory(client))
+	reg.RegisterMutation("noop", mutation.Factory)
+
+	validation, err := reg.BuildValidation([]config.Middleware{
+		{Type: "min-publication-age", Params: yamlNode("min_days: 0")}, // age gate off; only cve-check gates
+		{Type: "cve-check", Params: yamlNode("mode: " + valMode)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	retrieval, err := reg.BuildRetrieval([]config.Middleware{
+		{Type: "cve-check-retrieval", Params: yamlNode("mode: " + retMode)},
+		{Type: "local-disk-cache", Params: yamlNode("path: " + dir)},
+		{Type: "upstream-registry"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mp, err := reg.BuildMutation(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mp.Chain = []pipeline.MutationMiddleware{mutation.NoOp{}}
+
+	global := &project.Resolved{Validation: validation, Retrieval: retrieval, Mutation: mp}
+	if e, ok := retrieval.Head.(pipeline.Evictor); ok {
+		global.Cache = e
+	}
+	resolver := project.NewResolver("npm", reg, fakeProjectStore{}, global)
+	return &npmAdapter{
+		prefix:   "/npm",
+		storage:  store,
+		client:   client,
+		resolver: resolver,
+		logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+		now:      func() time.Time { return time.Now().UTC() },
+	}
+}
+
+// TestCveSharedClientDeniesVulnerableOnce proves the shared client/cache on the
+// deny path: with the retrieval stage in warn mode (so it serves and populates
+// the shared cache) and the validation stage in deny mode, a vulnerable version
+// is denied once with a single OSV round-trip — the validation stage reads the
+// result the retrieval stage cached.
+func TestCveSharedClientDeniesVulnerableOnce(t *testing.T) {
+	osv, hits := countingOSV(t, []cveosv.Vuln{{ID: "CVE-2026-0001", Summary: "arbitrary code execution"}})
+	store := newMemStore()
+	pack, raw := buildPack(time.Now().Add(-30*24*time.Hour), []byte("TARBALL"))
+	client := &rawClient{pack: pack, raw: raw, tarball: []byte("TARBALL")}
+	a := newSharedCveAdapter(t, osv.URL, "deny", "warn", client, store)
+	srv := newTestServer(t, a)
+
+	code, _ := fetchViaProxy(t, srv.URL+"/npm", "testpkg", "1.0.0")
+	if code != http.StatusForbidden {
+		t.Fatalf("vulnerable version should be denied with 403, got %d", code)
+	}
+	if hits.Load() != 1 {
+		t.Fatalf("shared client should query OSV exactly once, got %d hits", hits.Load())
+	}
+}
+
+// TestCveSharedClientCleanServesOnce proves the shared cache on the serve path:
+// with a clean OSV, the retrieval stage queries OSV (populating the shared
+// cache) and the validation stage reads the cached result, so the request serves
+// 200 with a single OSV round-trip.
+func TestCveSharedClientCleanServesOnce(t *testing.T) {
+	osv, hits := countingOSV(t, nil)
+	store := newMemStore()
+	pack, raw := buildPack(time.Now().Add(-30*24*time.Hour), []byte("TARBALL"))
+	client := &rawClient{pack: pack, raw: raw, tarball: []byte("TARBALL")}
+	a := newSharedCveAdapter(t, osv.URL, "deny", "deny", client, store)
+	srv := newTestServer(t, a)
+
+	code, body := fetchViaProxy(t, srv.URL+"/npm", "testpkg", "1.0.0")
+	if code != 200 || string(body) != "TARBALL" {
+		t.Fatalf("clean version should serve 200/TARBALL, got code=%d body=%q", code, body)
+	}
+	if hits.Load() != 1 {
+		t.Fatalf("shared cache should serve the validation stage: expected 1 OSV hit, got %d", hits.Load())
+	}
+}

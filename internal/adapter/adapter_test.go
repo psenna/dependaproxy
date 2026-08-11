@@ -7,7 +7,17 @@ import (
 	"testing"
 
 	"github.com/psenna/dependaproxy/internal/config"
+	"github.com/psenna/dependaproxy/internal/middleware/cveosv"
+	"gopkg.in/yaml.v3"
 )
+
+func yamlNode(s string) yaml.Node {
+	var n yaml.Node
+	if err := yaml.Unmarshal([]byte(s), &n); err != nil {
+		panic(err)
+	}
+	return n
+}
 
 type fakeAdapter struct{ prefix string }
 
@@ -16,6 +26,52 @@ func (f fakeAdapter) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(204) })
 }
 func (f fakeAdapter) InvalidateProjectCache(string) {}
+
+// TestCVESharedParams covers the shared-OSV-client param scan: validation
+// cve-check params win, retrieval cve-check-retrieval is the fallback, neither
+// configured yields zero Params, and a malformed params node falls back to zero
+// Params without panicking.
+func TestCVESharedParams(t *testing.T) {
+	// Validation cve-check params win over retrieval cve-check-retrieval.
+	cfg := config.RegistryConfig{
+		Validation: []config.Middleware{
+			{Type: "deny-list-check"},
+			{Type: "cve-check", Params: yamlNode("endpoint: http://val.example")},
+		},
+		Retrieval: []config.Middleware{
+			{Type: "cve-check-retrieval", Params: yamlNode("endpoint: http://ret.example")},
+		},
+	}
+	if pr := CVESharedParams(cfg); pr.Endpoint != "http://val.example" {
+		t.Fatalf("validation cve-check should win, got endpoint %q", pr.Endpoint)
+	}
+
+	// Fallback to retrieval cve-check-retrieval when validation has no cve-check.
+	cfg = config.RegistryConfig{
+		Validation: []config.Middleware{{Type: "deny-list-check"}},
+		Retrieval:  []config.Middleware{{Type: "cve-check-retrieval", Params: yamlNode("endpoint: http://ret.example")}},
+	}
+	if pr := CVESharedParams(cfg); pr.Endpoint != "http://ret.example" {
+		t.Fatalf("retrieval cve-check-retrieval should be the fallback, got endpoint %q", pr.Endpoint)
+	}
+
+	// Zero Params when neither is configured.
+	if pr := CVESharedParams(config.RegistryConfig{}); pr != (cveosv.Params{}) {
+		t.Fatalf("no cve middleware should yield zero Params, got %+v", pr)
+	}
+
+	// Malformed params node falls back to zero Params without panicking.
+	var bad yaml.Node
+	if err := bad.Encode("not-a-mapping"); err != nil {
+		t.Fatal(err)
+	}
+	cfg = config.RegistryConfig{
+		Validation: []config.Middleware{{Type: "cve-check", Params: bad}},
+	}
+	if pr := CVESharedParams(cfg); pr != (cveosv.Params{}) {
+		t.Fatalf("malformed params should fall back to zero Params, got %+v", pr)
+	}
+}
 
 func TestBuildUnknownType(t *testing.T) {
 	Register("unknown-test-type", func(_ context.Context, _ config.RegistryConfig, _ Deps) (Adapter, error) {

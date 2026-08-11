@@ -36,6 +36,32 @@ const (
 	OnErrorFailClosed = "fail_closed"
 )
 
+// DefaultedEndpoint returns e, or DefaultEndpoint when e is empty. It lets
+// callers that share a pre-built Client apply the same per-field defaulting
+// NewClient uses without re-deriving the whole client.
+func DefaultedEndpoint(e string) string {
+	if e == "" {
+		return DefaultEndpoint
+	}
+	return e
+}
+
+// DefaultedMode returns m, or DefaultMode when m is empty.
+func DefaultedMode(m string) string {
+	if m == "" {
+		return DefaultMode
+	}
+	return m
+}
+
+// DefaultedOnError returns o, or DefaultOnError when o is empty.
+func DefaultedOnError(o string) string {
+	if o == "" {
+		return DefaultOnError
+	}
+	return o
+}
+
 // Vuln is one vulnerability record in an OSV query response. Only the fields
 // surfaced in deny/warn messages are kept.
 type Vuln struct {
@@ -168,18 +194,9 @@ type Client struct {
 // the defaults. A nil client uses the configured timeout; a nil now uses
 // time.Now().UTC().
 func NewClient(pr Params, client *http.Client, now func() time.Time) *Client {
-	endpoint := pr.Endpoint
-	if endpoint == "" {
-		endpoint = DefaultEndpoint
-	}
-	mode := pr.Mode
-	if mode == "" {
-		mode = DefaultMode
-	}
-	onError := pr.OnError
-	if onError == "" {
-		onError = DefaultOnError
-	}
+	endpoint := DefaultedEndpoint(pr.Endpoint)
+	mode := DefaultedMode(pr.Mode)
+	onError := DefaultedOnError(pr.OnError)
 	timeout := pr.Timeout
 	if timeout <= 0 {
 		timeout = DefaultTimeout
