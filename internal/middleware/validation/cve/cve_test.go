@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/psenna/dependaproxy/internal/middleware/cveosv"
 	"github.com/psenna/dependaproxy/internal/pipeline"
 	"gopkg.in/yaml.v3"
 )
@@ -160,6 +161,55 @@ func TestCacheExpires(t *testing.T) {
 	_ = m.Validate(testCtx("lodash", "4.17.20"))
 	if hits.Load() != 2 {
 		t.Fatalf("after TTL expiry a fresh query is expected: got %d hits", hits.Load())
+	}
+}
+
+// TestFactoryWithClientSharesCache proves FactoryWithClient builds middlewares
+// that share the passed client and its cache: two middlewares built with
+// DIFFERENT mode/on_error params still share the same client/cache pointers,
+// and a query through the first populates the cache so the second does not hit
+// OSV again.
+func TestFactoryWithClientSharesCache(t *testing.T) {
+	srv, hits := osvServer(t, []string{"CVE-2021-1234"})
+	shared := cveosv.NewClient(params{Endpoint: srv.URL, CacheTTL: time.Hour}, nil, func() time.Time { return time.Now().UTC() })
+
+	var n1 yaml.Node
+	if err := n1.Encode(map[string]any{"mode": "warn"}); err != nil {
+		t.Fatal(err)
+	}
+	var n2 yaml.Node
+	if err := n2.Encode(map[string]any{"mode": "deny"}); err != nil {
+		t.Fatal(err)
+	}
+	mw1, err := FactoryWithClient(shared)(n1)
+	if err != nil {
+		t.Fatalf("factory 1: %v", err)
+	}
+	mw2, err := FactoryWithClient(shared)(n2)
+	if err != nil {
+		t.Fatalf("factory 2: %v", err)
+	}
+	m1 := mw1.(*Middleware)
+	m2 := mw2.(*Middleware)
+	if m1.client != shared || m2.client != shared {
+		t.Fatal("both middlewares must share the same client pointer")
+	}
+	if m1.cache != shared.Cache() || m2.cache != shared.Cache() {
+		t.Fatal("both middlewares must share the same cache pointer")
+	}
+	if m1.mode == m2.mode {
+		t.Fatalf("modes should differ per middleware, got %q == %q", m1.mode, m2.mode)
+	}
+	// Query through the first middleware populates the shared cache; the second
+	// must not hit OSV again.
+	if err := m1.Validate(testCtx("lodash", "4.17.20")); err != nil {
+		t.Fatalf("warn-mode validate should pass, got %v", err)
+	}
+	if err := m2.Validate(testCtx("lodash", "4.17.20")); err == nil {
+		t.Fatal("deny-mode validate should reject the vulnerable version")
+	}
+	if hits.Load() != 1 {
+		t.Fatalf("shared cache should serve the second query: expected 1 OSV hit, got %d", hits.Load())
 	}
 }
 

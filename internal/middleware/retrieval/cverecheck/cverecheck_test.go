@@ -275,6 +275,52 @@ func TestEvictNoEvictorReturnsNil(t *testing.T) {
 	}
 }
 
+// TestFactoryWithClientSharesCache proves FactoryWithClient builds middlewares
+// that share the passed client and its cache: two middlewares built with
+// DIFFERENT mode/on_error params still share the same client pointer, and a
+// Fetch through the first populates the cache so the second does not hit OSV
+// again.
+func TestFactoryWithClientSharesCache(t *testing.T) {
+	srv, hits := osvServer(t, []cveosv.Vuln{{ID: "CVE-2026-9999"}})
+	shared := cveosv.NewClient(cveosv.Params{Endpoint: srv.URL, CacheTTL: time.Hour}, nil, fixedNow())
+
+	var n1 yaml.Node
+	if err := n1.Encode(map[string]any{"mode": "warn"}); err != nil {
+		t.Fatal(err)
+	}
+	var n2 yaml.Node
+	if err := n2.Encode(map[string]any{"mode": "deny"}); err != nil {
+		t.Fatal(err)
+	}
+	mw1, err := FactoryWithClient(shared)(n1, &fakeNext{hit: true, data: []byte("BYTES")})
+	if err != nil {
+		t.Fatalf("factory 1: %v", err)
+	}
+	mw2, err := FactoryWithClient(shared)(n2, &fakeNext{hit: true, data: []byte("BYTES")})
+	if err != nil {
+		t.Fatalf("factory 2: %v", err)
+	}
+	m1 := mw1.(*Middleware)
+	m2 := mw2.(*Middleware)
+	if m1.client != shared || m2.client != shared {
+		t.Fatal("both middlewares must share the same client pointer")
+	}
+	if m1.mode == m2.mode {
+		t.Fatalf("modes should differ per middleware, got %q == %q", m1.mode, m2.mode)
+	}
+	// Fetch through the first middleware populates the shared cache; the second
+	// must not hit OSV again.
+	if hit, err := m1.Fetch(testCtx("npm", "lodash", "4.17.20")); err != nil || !hit {
+		t.Fatalf("warn-mode fetch: hit=%v err=%v", hit, err)
+	}
+	if hit, err := m2.Fetch(testCtx("npm", "lodash", "4.17.20")); err == nil || hit {
+		t.Fatalf("deny-mode fetch should reject, got hit=%v err=%v", hit, err)
+	}
+	if hits.Load() != 1 {
+		t.Fatalf("shared cache should serve the second query: expected 1 OSV hit, got %d", hits.Load())
+	}
+}
+
 func TestFactoryDecodesParams(t *testing.T) {
 	srv, hits := osvServer(t, nil)
 	var n yaml.Node

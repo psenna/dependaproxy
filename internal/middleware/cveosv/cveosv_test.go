@@ -33,6 +33,27 @@ func osvServer(t *testing.T, vulns []Vuln) (*httptest.Server, *atomic.Int64) {
 	return srv, &hits
 }
 
+func TestDefaultedHelpers(t *testing.T) {
+	if got := DefaultedEndpoint(""); got != DefaultEndpoint {
+		t.Errorf("DefaultedEndpoint(\"\") = %q, want %q", got, DefaultEndpoint)
+	}
+	if got := DefaultedEndpoint("http://example.com"); got != "http://example.com" {
+		t.Errorf("DefaultedEndpoint(non-empty) = %q, want passthrough", got)
+	}
+	if got := DefaultedMode(""); got != DefaultMode {
+		t.Errorf("DefaultedMode(\"\") = %q, want %q", got, DefaultMode)
+	}
+	if got := DefaultedMode("warn"); got != "warn" {
+		t.Errorf("DefaultedMode(non-empty) = %q, want passthrough", got)
+	}
+	if got := DefaultedOnError(""); got != DefaultOnError {
+		t.Errorf("DefaultedOnError(\"\") = %q, want %q", got, DefaultOnError)
+	}
+	if got := DefaultedOnError("fail_closed"); got != "fail_closed" {
+		t.Errorf("DefaultedOnError(non-empty) = %q, want passthrough", got)
+	}
+}
+
 func TestEcosystem(t *testing.T) {
 	for _, reg := range []string{"npm", "pypi"} {
 		if eco, ok := Ecosystem(reg); !ok || eco != reg {

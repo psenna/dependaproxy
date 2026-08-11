@@ -15,7 +15,9 @@ import (
 	"time"
 
 	"github.com/psenna/dependaproxy/internal/config"
+	"github.com/psenna/dependaproxy/internal/middleware/cveosv"
 	"github.com/psenna/dependaproxy/internal/project"
+	"gopkg.in/yaml.v3"
 )
 
 // Deps are shared dependencies passed to every adapter factory.
@@ -52,6 +54,38 @@ var factories = map[string]Factory{}
 // adapter package (via cmd/main import side-effects or explicit init).
 func Register(typeName string, f Factory) {
 	factories[typeName] = f
+}
+
+// CVESharedParams scans cfg for the first cve-check (validation) or
+// cve-check-retrieval (retrieval) middleware params and returns them for
+// building a shared cveosv.Client. Validation wins; mode/on_error are left
+// for the per-middleware factories to apply. Returns zero Params (all
+// defaults) if neither is configured.
+func CVESharedParams(cfg config.RegistryConfig) cveosv.Params {
+	for _, m := range cfg.Validation {
+		if m.Type == "cve-check" {
+			return decodeCVEParams(m.Params)
+		}
+	}
+	for _, m := range cfg.Retrieval {
+		if m.Type == "cve-check-retrieval" {
+			return decodeCVEParams(m.Params)
+		}
+	}
+	return cveosv.Params{}
+}
+
+// decodeCVEParams decodes a middleware params node into cveosv.Params. A zero
+// node or a decode error falls back to zero Params (all defaults).
+func decodeCVEParams(n yaml.Node) cveosv.Params {
+	var pr cveosv.Params
+	if n.IsZero() {
+		return pr
+	}
+	if err := n.Decode(&pr); err != nil {
+		return cveosv.Params{}
+	}
+	return pr
 }
 
 // Build builds all adapters for the configured registries, rejecting unknown

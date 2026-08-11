@@ -6,6 +6,7 @@ import (
 	"github.com/psenna/dependaproxy/internal/adapter"
 	"github.com/psenna/dependaproxy/internal/config"
 	"github.com/psenna/dependaproxy/internal/denylist"
+	"github.com/psenna/dependaproxy/internal/middleware/cveosv"
 	"github.com/psenna/dependaproxy/internal/middleware/mutation"
 	"github.com/psenna/dependaproxy/internal/middleware/mutation/stripscripts"
 	"github.com/psenna/dependaproxy/internal/middleware/retrieval/cverecheck"
@@ -36,14 +37,19 @@ func Factory(ctx context.Context, cfg config.RegistryConfig, deps adapter.Deps) 
 		return nil, err
 	}
 
+	// One OSV client (and its cache) shared by the validation cve-check and the
+	// retrieval cve-check-retrieval middlewares, so an untrusted request that
+	// runs both stages queries OSV once per (ecosystem,name,version).
+	sharedCVE := cveosv.NewClient(adapter.CVESharedParams(cfg), nil, deps.Now)
+
 	reg := pipeline.NewRegistry()
 	reg.RegisterValidation("deny-list-check", denylist.Factory(denyStore))
 	reg.RegisterValidation("min-publication-age", MinPubFactory)
-	reg.RegisterValidation("cve-check", cve.Factory)
+	reg.RegisterValidation("cve-check", cve.FactoryWithClient(sharedCVE))
 	reg.RegisterValidation("malware-scan", malware.Factory)
 	reg.RegisterValidation("guarddog-scan", guarddog.Factory(nil))
 	reg.RegisterValidation("provenance-verify", provenance.Factory(NewProvenanceSource(client)))
-	reg.RegisterRetrieval("cve-check-retrieval", cverecheck.Factory)
+	reg.RegisterRetrieval("cve-check-retrieval", cverecheck.FactoryWithClient(sharedCVE))
 	reg.RegisterRetrieval("local-disk-cache", localcache.Factory)
 	reg.RegisterRetrieval("s3-cache", s3cache.Factory)
 	reg.RegisterRetrieval("upstream-registry", UpstreamFactory(client))

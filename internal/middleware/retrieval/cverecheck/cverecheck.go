@@ -7,8 +7,13 @@
 // FIRST in the retrieval list (outermost) so it runs even when a downstream cache
 // middleware serves the artifact.
 //
-// It shares the OSV client + bounded TTL cache logic with the validation
-// cve-check middleware via internal/middleware/cveosv (separate cache instances).
+// It shares the OSV client + bounded TTL cache with the validation cve-check
+// middleware via internal/middleware/cveosv. When built via the adapter's
+// FactoryWithClient, both middlewares use one client/cache per adapter, so an
+// untrusted request that runs both stages queries OSV once per
+// (ecosystem,name,version); the retrieval stage still re-queries on every
+// serve (retroactive-advisory guarantee), it just benefits from the cache the
+// validation stage populated.
 //
 // mode deny (default): a confirmed match denies the serve with
 // pipeline.ErrRejected, which adapters map to 403. mode warn: the artifact is
@@ -121,4 +126,26 @@ var Factory pipeline.RetrievalFactory = func(p yaml.Node, next pipeline.Retrieva
 		}
 	}
 	return New(pr, nil, next, time.Now), nil
+}
+
+// FactoryWithClient builds the middleware from its raw params node against a
+// pre-built shared cveosv.Client, so the client and its cache are shared per
+// adapter with the validation-stage cve-check middleware. Only mode/on_error
+// are taken from the params; endpoint/httpClient/cache come from the shared
+// client. Adapters register this under "cve-check-retrieval".
+func FactoryWithClient(shared *cveosv.Client) pipeline.RetrievalFactory {
+	return func(p yaml.Node, next pipeline.RetrievalMiddleware) (pipeline.RetrievalMiddleware, error) {
+		var pr cveosv.Params
+		if !p.IsZero() {
+			if err := p.Decode(&pr); err != nil {
+				return nil, fmt.Errorf("cve-check-retrieval: decode params: %w", err)
+			}
+		}
+		return &Middleware{
+			client:  shared,
+			mode:    cveosv.DefaultedMode(pr.Mode),
+			onError: cveosv.DefaultedOnError(pr.OnError),
+			next:    next,
+		}, nil
+	}
 }

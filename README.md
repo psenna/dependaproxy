@@ -201,10 +201,11 @@ registries:
   ecosystem/name/version — a bounded TTL cache shared with the validation
   `cve-check` via the same `internal/middleware/cveosv` client logic).
   When both the validation `cve-check` and `cve-check-retrieval` are configured,
-  the first untrusted fetch makes **two** OSV calls (one per middleware — they
-  use **separate** caches); subsequent serves make **zero** calls while the TTL
-  caches are warm. In v1 the middleware only denies or warns — eviction of the
-  stored (already-trusted) record on a new advisory is deferred.
+  they share one OSV client and its bounded TTL cache per adapter, so the first
+  untrusted fetch makes **one** OSV call (the retrieval stage populates the
+  cache the validation stage reads); subsequent serves make **zero** calls while
+  the TTL cache is warm. In v1 the middleware only denies or warns — eviction
+  of the stored (already-trusted) record on a new advisory is deferred.
 
 ### Cache backends (retrieval)
 
