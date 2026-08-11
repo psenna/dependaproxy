@@ -1,6 +1,7 @@
 package maven
 
 import (
+	"context"
 	"encoding/xml"
 	"io"
 	"net/http"
@@ -14,7 +15,7 @@ import (
 func closeBody(c io.Closer) { _ = c.Close() }
 
 func TestMavenFactoryReturns501(t *testing.T) {
-	a, err := Factory(config.RegistryConfig{Type: "maven", Prefix: "/maven", Upstream: "u"}, adapter.Deps{})
+	a, err := Factory(context.Background(), config.RegistryConfig{Type: "maven", Prefix: "/maven", Upstream: "u"}, adapter.Deps{})
 	if err != nil {
 		t.Fatalf("Factory: %v", err)
 	}

@@ -62,7 +62,7 @@ func New(ctx context.Context, cfg *config.Config, db *sql.DB) (*Server, error) {
 		}
 		deps.DependencyTracker = tracker
 	}
-	adapters, err := adapter.Build(cfg.Registries, deps)
+	adapters, err := adapter.Build(ctx, cfg.Registries, deps)
 	if err != nil {
 		if tracker != nil {
 			_ = tracker.Shutdown(context.Background())

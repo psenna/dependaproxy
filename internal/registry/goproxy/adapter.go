@@ -27,16 +27,16 @@ func init() { adapter.Register("goproxy", Factory) }
 // upstream-registry (which stashes the *Info in ctx.Index for
 // min-publication-age). The mutation chain defaults to a single NoOp so the
 // PreFetch/PostFetch hook path is exercised; real mutations slot in via config.
-func Factory(cfg config.RegistryConfig, deps adapter.Deps) (adapter.Adapter, error) {
+func Factory(ctx context.Context, cfg config.RegistryConfig, deps adapter.Deps) (adapter.Adapter, error) {
 	client, err := New(cfg.Upstream, nil)
 	if err != nil {
 		return nil, err
 	}
-	storage, err := OpenStorage(context.Background(), deps.DB)
+	storage, err := OpenStorage(ctx, deps.DB)
 	if err != nil {
 		return nil, err
 	}
-	denyStore, err := denylist.OpenStore(context.Background(), deps.DB)
+	denyStore, err := denylist.OpenStore(ctx, deps.DB)
 	if err != nil {
 		return nil, err
 	}

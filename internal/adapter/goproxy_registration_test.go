@@ -54,7 +54,7 @@ func goproxyDeps(t *testing.T) adapter.Deps {
 }
 
 func TestGoproxyFactoryBuilds(t *testing.T) {
-	a, err := goproxy.Factory(config.RegistryConfig{Type: "goproxy", Prefix: "/goproxy", Upstream: "http://example.com"}, goproxyDeps(t))
+	a, err := goproxy.Factory(context.Background(), config.RegistryConfig{Type: "goproxy", Prefix: "/goproxy", Upstream: "http://example.com"}, goproxyDeps(t))
 	if err != nil {
 		t.Fatalf("Factory: %v", err)
 	}
@@ -66,7 +66,7 @@ func TestGoproxyFactoryBuilds(t *testing.T) {
 // TestGoproxyFactoryBuildsWithChains proves the Factory accepts the wired
 // validation + cache-retrieval chain shape from config.example.yaml.
 func TestGoproxyFactoryBuildsWithChains(t *testing.T) {
-	_, err := goproxy.Factory(config.RegistryConfig{
+	_, err := goproxy.Factory(context.Background(), config.RegistryConfig{
 		Type:     "goproxy",
 		Prefix:   "/goproxy",
 		Upstream: "http://example.com",
@@ -85,7 +85,7 @@ func TestGoproxyFactoryBuildsWithChains(t *testing.T) {
 }
 
 func TestGoproxyRegistered(t *testing.T) {
-	ads, err := adapter.Build([]config.RegistryConfig{{Type: "goproxy", Prefix: "/goproxy", Upstream: "http://example.com"}}, goproxyDeps(t))
+	ads, err := adapter.Build(context.Background(), []config.RegistryConfig{{Type: "goproxy", Prefix: "/goproxy", Upstream: "http://example.com"}}, goproxyDeps(t))
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
