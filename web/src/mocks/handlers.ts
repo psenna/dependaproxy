@@ -1,5 +1,3 @@
-import { http, HttpResponse } from 'msw'
+import { createAdminHandlers, healthzHandler } from '../test/handlers'
 
-export const handlers = [
-  http.get('*/healthz', () => HttpResponse.text('ok', { status: 200 })),
-]
+export const handlers = [healthzHandler, ...createAdminHandlers()]
