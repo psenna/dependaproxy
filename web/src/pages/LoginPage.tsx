@@ -55,7 +55,7 @@ export default function LoginPage() {
         <button
           type="submit"
           disabled={!token || submitting}
-          className="w-full rounded bg-blue-500 px-3 py-2 text-white disabled:opacity-50"
+          className="w-full rounded bg-blue-600 px-3 py-2 text-white disabled:opacity-50"
         >
           {submitting ? 'Signing in…' : 'Sign in'}
         </button>
