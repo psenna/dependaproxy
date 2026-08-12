@@ -86,7 +86,9 @@ describe('LoginPage', () => {
     )
     await user.type(screen.getByPlaceholderText('Admin token'), 'tok-123')
     await user.click(screen.getByRole('button', { name: /sign in/i }))
-    expect(screen.getByTestId('projects')).toBeInTheDocument()
+    // The login flow is async (probe -> setToken -> navigate); wait for the
+    // redirect rather than asserting synchronously (flaky under load).
+    expect(await screen.findByTestId('projects')).toBeInTheDocument()
     expect(screen.queryByTestId('home')).not.toBeInTheDocument()
   })
 })

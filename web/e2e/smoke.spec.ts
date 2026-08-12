@@ -1,11 +1,11 @@
 import { expect, test } from '@playwright/test'
 
-test('logs in and shows the DependaProxy heading', async ({ page }) => {
+test('logs in and shows the dashboard', async ({ page }) => {
   await page.goto('/')
   await page.getByPlaceholder('Admin token').fill('test-token')
   await page.getByRole('button', { name: /sign in/i }).click()
   await expect(page.getByRole('button', { name: 'Logout' })).toBeVisible()
-  await expect(page.getByRole('heading', { name: /dependaproxy/i })).toBeVisible()
+  await expect(page.getByText(/proxy healthy/i)).toBeVisible()
 })
 
 test('serves /healthz via the MSW service worker', async ({ page }) => {
