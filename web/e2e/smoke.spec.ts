@@ -1,7 +1,10 @@
 import { expect, test } from '@playwright/test'
 
-test('loads the app and shows the DependaProxy heading', async ({ page }) => {
+test('logs in and shows the DependaProxy heading', async ({ page }) => {
   await page.goto('/')
+  await page.getByPlaceholder('Admin token').fill('test-token')
+  await page.getByRole('button', { name: /sign in/i }).click()
+  await expect(page.getByRole('button', { name: 'Logout' })).toBeVisible()
   await expect(page.getByRole('heading', { name: /dependaproxy/i })).toBeVisible()
 })
 
