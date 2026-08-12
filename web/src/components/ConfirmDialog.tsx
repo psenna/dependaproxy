@@ -22,11 +22,36 @@ export default function ConfirmDialog({
   onCancel,
 }: ConfirmDialogProps) {
   const confirmRef = useRef<HTMLButtonElement>(null)
+  const panelRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     if (!open) return
     function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === 'Escape') onCancel()
+      if (event.key === 'Escape') {
+        onCancel()
+        return
+      }
+      if (event.key !== 'Tab') return
+      const panel = panelRef.current
+      if (!panel) return
+      const focusable = Array.from(
+        panel.querySelectorAll<HTMLElement>(
+          'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        ),
+      )
+      if (focusable.length === 0) return
+      const first = focusable[0]
+      const last = focusable[focusable.length - 1]
+      const active = document.activeElement
+      if (event.shiftKey) {
+        if (active === first || !panel.contains(active)) {
+          event.preventDefault()
+          last.focus()
+        }
+      } else if (active === last || !panel.contains(active)) {
+        event.preventDefault()
+        first.focus()
+      }
     }
     document.addEventListener('keydown', handleKeyDown)
     return () => document.removeEventListener('keydown', handleKeyDown)
@@ -38,7 +63,7 @@ export default function ConfirmDialog({
 
   if (!open) return null
 
-  const confirmClass = confirmTone === 'danger' ? 'bg-red-500 text-white' : 'bg-blue-500 text-white'
+  const confirmClass = confirmTone === 'danger' ? 'bg-red-500 text-white' : 'bg-blue-600 text-white'
 
   return (
     <div
@@ -46,6 +71,7 @@ export default function ConfirmDialog({
       onClick={onCancel}
     >
       <div
+        ref={panelRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="confirm-dialog-title"

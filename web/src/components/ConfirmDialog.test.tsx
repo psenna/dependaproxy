@@ -1,7 +1,30 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { useRef, useState } from 'react'
 import { describe, expect, it, vi } from 'vitest'
 import ConfirmDialog from './ConfirmDialog'
+
+function FocusReturnHarness() {
+  const [open, setOpen] = useState(false)
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  return (
+    <div>
+      <button type="button" ref={triggerRef} onClick={() => setOpen(true)}>
+        Open dialog
+      </button>
+      <ConfirmDialog
+        open={open}
+        title="Delete project"
+        message="Are you sure?"
+        onConfirm={() => setOpen(false)}
+        onCancel={() => {
+          setOpen(false)
+          triggerRef.current?.focus()
+        }}
+      />
+    </div>
+  )
+}
 
 describe('ConfirmDialog', () => {
   it('renders nothing when open is false', () => {
@@ -77,6 +100,64 @@ describe('ConfirmDialog', () => {
       />,
     )
     expect(screen.getByRole('button', { name: 'Delete' })).toHaveFocus()
+  })
+
+  it('traps Tab focus within the dialog', async () => {
+    const user = userEvent.setup()
+    render(
+      <ConfirmDialog
+        open
+        title="Delete project"
+        message="Are you sure?"
+        confirmLabel="Delete"
+        cancelLabel="Cancel"
+        onConfirm={() => {}}
+        onCancel={() => {}}
+      />,
+    )
+    const confirm = screen.getByRole('button', { name: 'Delete' })
+    const cancel = screen.getByRole('button', { name: 'Cancel' })
+    expect(confirm).toHaveFocus()
+
+    await user.tab()
+    expect(cancel).toHaveFocus()
+
+    await user.tab()
+    expect(confirm).toHaveFocus()
+  })
+
+  it('traps Shift+Tab focus within the dialog', async () => {
+    const user = userEvent.setup()
+    render(
+      <ConfirmDialog
+        open
+        title="Delete project"
+        message="Are you sure?"
+        confirmLabel="Delete"
+        cancelLabel="Cancel"
+        onConfirm={() => {}}
+        onCancel={() => {}}
+      />,
+    )
+    const confirm = screen.getByRole('button', { name: 'Delete' })
+    const cancel = screen.getByRole('button', { name: 'Cancel' })
+    expect(confirm).toHaveFocus()
+
+    await user.tab({ shift: true })
+    expect(cancel).toHaveFocus()
+
+    await user.tab({ shift: true })
+    expect(confirm).toHaveFocus()
+  })
+
+  it('returns focus to the trigger after Escape closes', () => {
+    render(<FocusReturnHarness />)
+    const trigger = screen.getByRole('button', { name: 'Open dialog' })
+    fireEvent.click(trigger)
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(trigger).toHaveFocus()
   })
 
   it('renders custom labels', () => {

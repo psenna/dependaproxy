@@ -137,7 +137,7 @@ export default function ProjectCreatePage({ knownRegistries = KNOWN_REGISTRIES }
         <button
           type="button"
           onClick={addRegistry}
-          className="rounded bg-blue-500 px-3 py-1.5 text-sm text-white hover:bg-blue-600"
+          className="rounded bg-blue-600 px-3 py-1.5 text-sm text-white hover:bg-blue-700"
         >
           Add registry
         </button>
@@ -146,7 +146,7 @@ export default function ProjectCreatePage({ knownRegistries = KNOWN_REGISTRIES }
           <button
             type="submit"
             disabled={submitDisabled}
-            className="rounded bg-blue-500 px-3 py-1.5 text-sm text-white hover:bg-blue-600 disabled:cursor-not-allowed disabled:opacity-50"
+            className="rounded bg-blue-600 px-3 py-1.5 text-sm text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {submitting ? 'Creating…' : 'Create project'}
           </button>

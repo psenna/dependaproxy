@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import EmptyState from '../components/EmptyState'
 import ErrorState from '../components/ErrorState'
@@ -13,16 +13,24 @@ function registriesSummary(registries: Record<string, RegistryConfig>): string {
   return keys.length > 0 ? keys.join(', ') : '—'
 }
 
+type TabValue = 'config' | 'dependencies'
+
+const tabs: Array<{ id: string; panelId: string; value: TabValue; label: string }> = [
+  { id: 'tab-config', panelId: 'panel-config', value: 'config', label: 'Config' },
+  { id: 'tab-deps', panelId: 'panel-deps', value: 'dependencies', label: 'Dependencies' },
+]
+
 export default function ProjectDetailPage({ debounceMs = 400 }: { debounceMs?: number }) {
   const { key = '' } = useParams()
   const project = useProject(key)
-  const [activeTab, setActiveTab] = useState<'config' | 'dependencies'>('config')
+  const [activeTab, setActiveTab] = useState<TabValue>('config')
   const [registryInput, setRegistryInput] = useState('')
   const [pkgInput, setPkgInput] = useState('')
   const [copiedSha, setCopiedSha] = useState<string | null>(null)
   const debRegistry = useDebouncedValue(registryInput, debounceMs)
   const debPkg = useDebouncedValue(pkgInput, debounceMs)
   const dependencies = useDependencies(key, { registry: debRegistry, pkg: debPkg })
+  const tablistRef = useRef<HTMLDivElement>(null)
 
   function copySha256(sha: string) {
     try {
@@ -32,6 +40,29 @@ export default function ProjectDetailPage({ debounceMs = 400 }: { debounceMs?: n
     }
     setCopiedSha(sha)
     window.setTimeout(() => setCopiedSha(null), 1500)
+  }
+
+  function handleTablistKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
+    const tabButtons = Array.from(
+      tablistRef.current?.querySelectorAll<HTMLButtonElement>('[role="tab"]') ?? [],
+    )
+    if (tabButtons.length === 0) return
+    const currentIndex = tabButtons.indexOf(document.activeElement as HTMLButtonElement)
+    if (event.key === 'ArrowRight') {
+      event.preventDefault()
+      const next = tabButtons[(currentIndex + 1) % tabButtons.length]
+      next.focus()
+      setActiveTab(next.dataset.tab === 'dependencies' ? 'dependencies' : 'config')
+    } else if (event.key === 'ArrowLeft') {
+      event.preventDefault()
+      const prev = tabButtons[(currentIndex - 1 + tabButtons.length) % tabButtons.length]
+      prev.focus()
+      setActiveTab(prev.dataset.tab === 'dependencies' ? 'dependencies' : 'config')
+    } else if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault()
+      const active = tabButtons[currentIndex]
+      if (active) setActiveTab(active.dataset.tab === 'dependencies' ? 'dependencies' : 'config')
+    }
   }
 
   let errorMessage: string | null = null
@@ -71,48 +102,66 @@ export default function ProjectDetailPage({ debounceMs = 400 }: { debounceMs?: n
             </Link>
           </div>
 
-          <div data-testid="project-detail" className="mt-4 rounded border border-gray-200 bg-white p-4">
-            <p>
-              <span className="font-medium">Key:</span> {project.data.key}
-            </p>
-            <p>
-              <span className="font-medium">Registries:</span>{' '}
-              <span data-testid="project-registries">{registriesSummary(project.data.registries)}</span>
-            </p>
+          <div
+            ref={tablistRef}
+            role="tablist"
+            onKeyDown={handleTablistKeyDown}
+            className="mt-4 flex gap-2"
+          >
+            {tabs.map((tab) => (
+              <button
+                key={tab.id}
+                type="button"
+                role="tab"
+                id={tab.id}
+                aria-controls={tab.panelId}
+                aria-selected={activeTab === tab.value}
+                tabIndex={activeTab === tab.value ? 0 : -1}
+                data-tab={tab.value}
+                onClick={() => setActiveTab(tab.value)}
+                className={
+                  activeTab === tab.value
+                    ? 'rounded bg-blue-600 px-3 py-1.5 text-sm text-white'
+                    : 'rounded border border-gray-300 px-3 py-1.5 text-sm text-gray-600'
+                }
+              >
+                {tab.label}
+              </button>
+            ))}
           </div>
 
-          <div role="tablist" className="mt-4 flex gap-2">
-            <button
-              type="button"
-              role="tab"
-              aria-selected={activeTab === 'config'}
-              onClick={() => setActiveTab('config')}
-              className={
-                activeTab === 'config'
-                  ? 'rounded bg-blue-500 px-3 py-1.5 text-sm text-white'
-                  : 'rounded border border-gray-300 px-3 py-1.5 text-sm text-gray-600'
-              }
+          {activeTab === 'config' && (
+            <section
+              id="panel-config"
+              role="tabpanel"
+              aria-labelledby="tab-config"
+              className="mt-4"
             >
-              Config
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={activeTab === 'dependencies'}
-              onClick={() => setActiveTab('dependencies')}
-              className={
-                activeTab === 'dependencies'
-                  ? 'rounded bg-blue-500 px-3 py-1.5 text-sm text-white'
-                  : 'rounded border border-gray-300 px-3 py-1.5 text-sm text-gray-600'
-              }
-            >
-              Dependencies
-            </button>
-          </div>
+              <div
+                data-testid="project-detail"
+                className="rounded border border-gray-200 bg-white p-4"
+              >
+                <p>
+                  <span className="font-medium">Key:</span> {project.data.key}
+                </p>
+                <p>
+                  <span className="font-medium">Registries:</span>{' '}
+                  <span data-testid="project-registries">
+                    {registriesSummary(project.data.registries)}
+                  </span>
+                </p>
+              </div>
+            </section>
+          )}
 
           {activeTab === 'dependencies' && (
-            <div className="mt-4">
-              <div className="flex gap-2">
+            <section
+              id="panel-deps"
+              role="tabpanel"
+              aria-labelledby="tab-deps"
+              className="mt-4"
+            >
+              <div className="flex flex-wrap gap-2">
                 <input
                   type="text"
                   aria-label="Filter by registry"
@@ -152,55 +201,73 @@ export default function ProjectDetailPage({ debounceMs = 400 }: { debounceMs?: n
                 </div>
               )}
               {dependencies.isSuccess && dependencies.data.dependencies.length > 0 && (
-                <table
-                  data-testid="dependencies-table"
-                  className="mt-4 w-full border-collapse text-left text-sm"
-                >
-                  <thead>
-                    <tr className="border-b text-gray-500">
-                      <th className="py-2 pr-4 font-medium">registry</th>
-                      <th className="py-2 pr-4 font-medium">pkg</th>
-                      <th className="py-2 pr-4 font-medium">version</th>
-                      <th className="py-2 pr-4 font-medium">artifact_id</th>
-                      <th className="py-2 pr-4 font-medium">sha256</th>
-                      <th className="py-2 pr-4 font-medium">first_downloaded_at</th>
-                      <th className="py-2 pr-4 font-medium">last_downloaded_at</th>
-                      <th className="py-2 font-medium">download_count</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {dependencies.data.dependencies.map((dep, i) => (
-                      <tr
-                        key={`${dep.registry}-${dep.pkg}-${dep.version}`}
-                        data-testid={`dependency-row-${i}`}
-                        className="border-b"
-                      >
-                        <td className="py-2 pr-4">{dep.registry}</td>
-                        <td className="py-2 pr-4">{dep.pkg}</td>
-                        <td className="py-2 pr-4">{dep.version}</td>
-                        <td className="py-2 pr-4">{dep.artifact_id}</td>
-                        <td className="py-2 pr-4" title={dep.sha256}>
-                          {dep.sha256.slice(0, 12)}
-                          {'…'}
-                          <button
-                            type="button"
-                            data-testid={`sha256-copy-${i}`}
-                            aria-label="Copy sha256"
-                            onClick={() => copySha256(dep.sha256)}
-                            className="ml-2 text-blue-600 hover:underline"
-                          >
-                            {copiedSha === dep.sha256 ? 'Copied' : 'Copy'}
-                          </button>
-                        </td>
-                        <td className="py-2 pr-4">{dep.first_downloaded_at}</td>
-                        <td className="py-2 pr-4">{dep.last_downloaded_at}</td>
-                        <td className="py-2">{dep.download_count}</td>
+                <div className="mt-4 overflow-x-auto">
+                  <table
+                    data-testid="dependencies-table"
+                    className="w-full border-collapse text-left text-sm"
+                  >
+                    <thead>
+                      <tr className="border-b text-gray-500">
+                        <th scope="col" className="py-2 pr-4 font-medium">
+                          registry
+                        </th>
+                        <th scope="col" className="py-2 pr-4 font-medium">
+                          pkg
+                        </th>
+                        <th scope="col" className="py-2 pr-4 font-medium">
+                          version
+                        </th>
+                        <th scope="col" className="py-2 pr-4 font-medium">
+                          artifact_id
+                        </th>
+                        <th scope="col" className="py-2 pr-4 font-medium">
+                          sha256
+                        </th>
+                        <th scope="col" className="py-2 pr-4 font-medium">
+                          first_downloaded_at
+                        </th>
+                        <th scope="col" className="py-2 pr-4 font-medium">
+                          last_downloaded_at
+                        </th>
+                        <th scope="col" className="py-2 font-medium">
+                          download_count
+                        </th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody>
+                      {dependencies.data.dependencies.map((dep, i) => (
+                        <tr
+                          key={`${dep.registry}-${dep.pkg}-${dep.version}`}
+                          data-testid={`dependency-row-${i}`}
+                          className="border-b"
+                        >
+                          <td className="py-2 pr-4">{dep.registry}</td>
+                          <td className="py-2 pr-4">{dep.pkg}</td>
+                          <td className="py-2 pr-4">{dep.version}</td>
+                          <td className="py-2 pr-4">{dep.artifact_id}</td>
+                          <td className="py-2 pr-4" title={dep.sha256}>
+                            {dep.sha256.slice(0, 12)}
+                            {'…'}
+                            <button
+                              type="button"
+                              data-testid={`sha256-copy-${i}`}
+                              aria-label="Copy sha256"
+                              onClick={() => copySha256(dep.sha256)}
+                              className="ml-2 text-blue-600 hover:underline"
+                            >
+                              {copiedSha === dep.sha256 ? 'Copied' : 'Copy'}
+                            </button>
+                          </td>
+                          <td className="py-2 pr-4">{dep.first_downloaded_at}</td>
+                          <td className="py-2 pr-4">{dep.last_downloaded_at}</td>
+                          <td className="py-2">{dep.download_count}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               )}
-            </div>
+            </section>
           )}
         </div>
       )}
