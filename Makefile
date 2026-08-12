@@ -36,7 +36,7 @@ DOCKER_RUN_RACE := $(DOCKER_RUN) -e CGO_ENABLED=1
 # containers. npm traffic goes through the DependaProxy registry, which the
 # nested DinD daemon reaches via the fixed dependaproxy IP (172.23.0.10).
 NODE_IMAGE       ?= node:22-alpine
-PLAYWRIGHT_IMAGE ?= mcr.microsoft.com/playwright:v1.48.0-jammy
+PLAYWRIGHT_IMAGE ?= mcr.microsoft.com/playwright:v1.62.1-jammy
 
 DOCKER_RUN_WEB := $(DOCKER) run --rm -v "$(CURDIR):/work" -w /work/web \
 	--add-host=dependaproxy:172.23.0.10 \
