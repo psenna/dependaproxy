@@ -32,13 +32,32 @@ DOCKER_RUN    := $(DOCKER) run --rm -v "$(CURDIR):/work" -w /work \
 # golang:1.25 image ships gcc, so enable CGo only for the race test target.
 DOCKER_RUN_RACE := $(DOCKER_RUN) -e CGO_ENABLED=1
 
+# Web (Vite + React + TS) targets run inside disposable node/playwright
+# containers. npm traffic goes through the DependaProxy registry, which the
+# nested DinD daemon reaches via the fixed dependaproxy IP (172.23.0.10).
+NODE_IMAGE       ?= node:22-alpine
+PLAYWRIGHT_IMAGE ?= mcr.microsoft.com/playwright:v1.48.0-jammy
+
+DOCKER_RUN_WEB := $(DOCKER) run --rm -v "$(CURDIR):/work" -w /work/web \
+	--add-host=dependaproxy:172.23.0.10 \
+	-e NPM_CONFIG_REGISTRY=http://dependaproxy:8080/npm \
+	-e CI=1 \
+	$(NODE_IMAGE)
+
+DOCKER_RUN_E2E := $(DOCKER) run --rm -v "$(CURDIR):/work" -w /work/web \
+	--add-host=dependaproxy:172.23.0.10 \
+	-e NPM_CONFIG_REGISTRY=http://dependaproxy:8080/npm \
+	-e CI=1 \
+	$(PLAYWRIGHT_IMAGE)
+
 # Pin tool versions for reproducibility. golangci-lint is installed via
 # `go install` so it is built with the project's Go toolchain (a prebuilt
 # v2.0.x binary is built with go1.24 and refuses a go1.25 target).
 GOLANGCI_LINT_VERSION := v2.12.2
 GOVULNCHECK_VERSION   := latest
 
-.PHONY: all test vet fmt-check lint vuln tidy run db stop-db minio stop-minio clean
+.PHONY: all test vet fmt-check lint vuln tidy run db stop-db minio stop-minio clean \
+	web-install web-build web-test web-lint web-format web-e2e
 
 all: vet fmt-check test
 
@@ -103,3 +122,22 @@ stop-minio:
 
 clean:
 	rm -rf cover.out cover.html
+
+# --- web/ (Vite + React + TS scaffold, issue #140) ---
+web-install:
+	$(DOCKER_RUN_WEB) npm ci
+
+web-build:
+	$(DOCKER_RUN_WEB) npm run build
+
+web-test:
+	$(DOCKER_RUN_WEB) npm test
+
+web-lint:
+	$(DOCKER_RUN_WEB) npm run lint
+
+web-format:
+	$(DOCKER_RUN_WEB) npm run format
+
+web-e2e:
+	$(DOCKER_RUN_E2E) sh -c 'npx playwright install chromium && npm run e2e'
