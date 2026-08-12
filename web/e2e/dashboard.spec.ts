@@ -9,7 +9,7 @@ async function login(page: import('@playwright/test').Page) {
 test('shows a healthy proxy and project count on the dashboard', async ({ page }) => {
   await login(page)
   await expect(page.getByText(/proxy healthy/i)).toBeVisible({ timeout: 10_000 })
-  await expect(page.getByText(/projects:\s*1/i)).toBeVisible()
+  await expect(page.getByText(/projects:\s*2/i)).toBeVisible()
 })
 
 test('reflects a healthz failure after refetch', async ({ page }) => {

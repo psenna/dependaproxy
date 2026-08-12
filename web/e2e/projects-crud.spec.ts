@@ -23,6 +23,9 @@ test('delete removes the project row', async ({ page }) => {
   await page.getByTestId('project-delete-my-app').click()
   await page.getByRole('button', { name: /^delete$/i }).click()
   await expect(page.getByTestId('project-delete-my-app')).not.toBeVisible()
+  await page.getByTestId('project-delete-empty-app').click()
+  await page.getByRole('button', { name: /^delete$/i }).click()
+  await expect(page.getByTestId('project-delete-empty-app')).not.toBeVisible()
   await expect(page.getByTestId('projects-empty')).toBeVisible()
 })
 
@@ -56,6 +59,6 @@ test('edits a project and persists the changes', async ({ page }) => {
   // Re-open edit via client-side navigation (NOT page.goto) so the MSW
   // worker's in-memory fixtures survive and reflect the saved change.
   await page.getByRole('link', { name: 'Projects' }).click()
-  await page.getByRole('link', { name: 'Edit' }).click()
+  await page.getByTestId('project-row-my-app').getByRole('link', { name: 'Edit' }).click()
   await expect(page.getByTestId('override-retrieval')).toBeChecked()
 })
