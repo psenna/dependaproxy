@@ -5,6 +5,7 @@ import LoginPage from './pages/LoginPage'
 import NotFoundPage from './pages/NotFoundPage'
 import PlaceholderPage from './pages/PlaceholderPage'
 import ProjectCreatePage from './pages/ProjectCreatePage'
+import ProjectEditPage from './pages/ProjectEditPage'
 import ProjectsListPage from './pages/ProjectsListPage'
 
 export function AppRoutes() {
@@ -16,7 +17,7 @@ export function AppRoutes() {
         <Route path="/projects" element={<ProjectsListPage />} />
         <Route path="/projects/new" element={<ProjectCreatePage />} />
         <Route path="/projects/:key" element={<PlaceholderPage title="Project detail" />} />
-        <Route path="/projects/:key/edit" element={<PlaceholderPage title="Edit project" />} />
+        <Route path="/projects/:key/edit" element={<ProjectEditPage />} />
       </Route>
       <Route path="*" element={<NotFoundPage />} />
     </Routes>

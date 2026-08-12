@@ -10,6 +10,7 @@ export interface RegistryConfigEditorProps {
   onChange: (next: { registryType: string; value: RegistryConfig }) => void
   onValidityChange: (isValid: boolean) => void
   onRemove: () => void
+  overrideMode?: boolean
 }
 
 const CHAINS: MiddlewareChain[] = ['validation', 'retrieval', 'mutation']
@@ -21,12 +22,14 @@ export default function RegistryConfigEditor({
   onChange,
   onValidityChange,
   onRemove,
+  overrideMode = false,
 }: RegistryConfigEditorProps) {
   const chainValidRef = useRef<Record<MiddlewareChain, boolean>>({
     validation: true,
     retrieval: true,
     mutation: true,
   })
+  const draftRef = useRef<Partial<Record<MiddlewareChain, Middleware[]>>>({})
   const lastEmittedRef = useRef<boolean | null>(null)
 
   function emitValidity() {
@@ -56,6 +59,20 @@ export default function RegistryConfigEditor({
   function handleChainValidity(chain: MiddlewareChain, isValid: boolean) {
     chainValidRef.current = { ...chainValidRef.current, [chain]: isValid }
     emitValidity()
+  }
+
+  function handleToggleOverride(chain: MiddlewareChain, checked: boolean) {
+    const nextValue: RegistryConfig = { ...value }
+    if (checked) {
+      nextValue[chain] = draftRef.current[chain] ?? []
+      chainValidRef.current = { ...chainValidRef.current, [chain]: false }
+    } else {
+      draftRef.current[chain] = value[chain] ?? []
+      delete nextValue[chain]
+      chainValidRef.current = { ...chainValidRef.current, [chain]: true }
+    }
+    emitValidity()
+    onChange({ registryType, value: nextValue })
   }
 
   return (
@@ -88,15 +105,41 @@ export default function RegistryConfigEditor({
           </option>
         ))}
       </select>
-      {CHAINS.map((chain) => (
-        <MiddlewareChainEditor
-          key={chain}
-          chain={chain}
-          value={value[chain] ?? []}
-          onChange={(next) => handleChainChange(chain, next)}
-          onValidityChange={(isValid) => handleChainValidity(chain, isValid)}
-        />
-      ))}
+      {CHAINS.map((chain) => {
+        if (overrideMode) {
+          const overridden = value[chain] !== undefined
+          return (
+            <div key={chain} className="mb-4">
+              <label className="mb-1 flex items-center gap-2 text-sm text-gray-700">
+                <input
+                  type="checkbox"
+                  data-testid={`override-${chain}`}
+                  checked={overridden}
+                  onChange={(e) => handleToggleOverride(chain, e.target.checked)}
+                />
+                Override {chain} (else inherit global)
+              </label>
+              {overridden && (
+                <MiddlewareChainEditor
+                  chain={chain}
+                  value={value[chain] ?? draftRef.current[chain] ?? []}
+                  onChange={(next) => handleChainChange(chain, next)}
+                  onValidityChange={(isValid) => handleChainValidity(chain, isValid)}
+                />
+              )}
+            </div>
+          )
+        }
+        return (
+          <MiddlewareChainEditor
+            key={chain}
+            chain={chain}
+            value={value[chain] ?? []}
+            onChange={(next) => handleChainChange(chain, next)}
+            onValidityChange={(isValid) => handleChainValidity(chain, isValid)}
+          />
+        )
+      })}
     </div>
   )
 }

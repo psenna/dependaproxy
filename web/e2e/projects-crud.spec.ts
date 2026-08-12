@@ -37,3 +37,25 @@ test('creates a project and shows it in the list', async ({ page }) => {
   await page.getByRole('link', { name: 'Projects' }).click()
   await expect(page.getByTestId('project-row-new-e2e-app')).toBeVisible()
 })
+
+test('edits a project and persists the changes', async ({ page }) => {
+  await login(page)
+  await page.goto('/projects/my-app/edit')
+  await expect(page.getByLabel('Key')).toHaveValue('my-app')
+  await expect(page.getByTestId('override-validation')).toBeChecked()
+  await expect(page.getByTestId('override-retrieval')).not.toBeChecked()
+
+  // Toggle the retrieval override on and add a middleware to it.
+  await page.getByTestId('override-retrieval').check()
+  const retrievalEditor = page.getByTestId('middleware-chain-editor').filter({ hasText: 'retrieval' })
+  await retrievalEditor.getByRole('button', { name: 'Add middleware' }).click()
+  await retrievalEditor.getByLabel('Type').selectOption('upstream-registry')
+  await page.getByRole('button', { name: 'Save project' }).click()
+  await expect(page).toHaveURL(/\/projects\/my-app$/)
+
+  // Re-open edit via client-side navigation (NOT page.goto) so the MSW
+  // worker's in-memory fixtures survive and reflect the saved change.
+  await page.getByRole('link', { name: 'Projects' }).click()
+  await page.getByRole('link', { name: 'Edit' }).click()
+  await expect(page.getByTestId('override-retrieval')).toBeChecked()
+})
