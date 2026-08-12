@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -307,14 +308,29 @@ func rewriteTarballs(raw []byte, base, pkg string) ([]byte, error) {
 }
 
 // parseTarballPath splits "<pkg>/-/<version>" into (pkg, version).
-func parseTarballPath(path string) (pkg, version string, ok bool) {
-	idx := strings.Index(path, "/-/")
+func parseTarballPath(p string) (pkg, version string, ok bool) {
+	idx := strings.Index(p, "/-/")
 	if idx <= 0 {
 		return "", "", false
 	}
-	pkg = strings.TrimPrefix(path[:idx], "/")
-	version = path[idx+3:]
+	pkg = strings.TrimPrefix(p[:idx], "/")
+	version = p[idx+3:]
 	if pkg == "" || version == "" || strings.Contains(version, "/") {
+		return "", "", false
+	}
+	// Accept the public-registry tarball filename format (<name>-<version>.tgz,
+	// e.g. css-tools-4.5.0.tgz for @adobe/css-tools) in addition to the proxy's
+	// own rewritten form (<version>, no .tgz / name prefix). The URLs produced
+	// by `npm config replace-registry-host=always` (rewriting lockfile dist URLs
+	// to this proxy) carry the public filename, which must normalize back to the
+	// bare version for the upstream fetch and store lookup. Stripping the
+	// "<name>-" prefix is safe: npm versions are semver, so a real version can
+	// never begin with the package name followed by a hyphen.
+	version = strings.TrimSuffix(version, ".tgz")
+	if name := path.Base(pkg); strings.HasPrefix(version, name+"-") {
+		version = strings.TrimPrefix(version, name+"-")
+	}
+	if version == "" {
 		return "", "", false
 	}
 	return pkg, version, true

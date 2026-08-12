@@ -567,3 +567,58 @@ func TestNpmScopedPackageUnchanged(t *testing.T) {
 		t.Errorf("project key on request context = %q, want \"\"", key)
 	}
 }
+
+func TestParseTarballPath(t *testing.T) {
+	tests := []struct {
+		name    string
+		path    string
+		wantPkg string
+		wantVer string
+		wantOK  bool
+	}{
+		{"public format unscoped", "/npm/lodash/-/lodash-4.17.21.tgz", "npm/lodash", "4.17.21", true},
+		{"public format scoped", "/npm/@adobe/css-tools/-/css-tools-4.5.0.tgz", "npm/@adobe/css-tools", "4.5.0", true},
+		{"proxy format scoped", "/npm/@adobe/css-tools/-/4.5.0", "npm/@adobe/css-tools", "4.5.0", true},
+		{"proxy format unscoped", "/npm/lodash/-/4.17.21", "npm/lodash", "4.17.21", true},
+		{"name prefix without tgz", "/npm/lodash/-/lodash-4.17.21", "npm/lodash", "4.17.21", true},
+		{"no tarball segment", "/npm/lodash", "", "", false},
+		{"empty version", "/npm/lodash/-/", "", "", false},
+		{"nested version rejected", "/npm/lodash/-/4.17.21/extra", "", "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotPkg, gotVer, gotOK := parseTarballPath(tt.path)
+			if gotPkg != tt.wantPkg || gotVer != tt.wantVer || gotOK != tt.wantOK {
+				t.Errorf("parseTarballPath(%q) = (%q, %q, %v), want (%q, %q, %v)",
+					tt.path, gotPkg, gotVer, gotOK, tt.wantPkg, tt.wantVer, tt.wantOK)
+			}
+		})
+	}
+}
+
+// TestNpmPublicFormatTarballServes requests the tarball via the public-registry
+// filename (name-version.tgz) — the URL shape `npm config replace-registry-host
+// =always` produces when rewriting a lockfile's public dist URLs to this proxy.
+// It must normalize to the same trusted fetch (validate + store + serve) as the
+// proxy's own rewritten URL.
+func TestNpmPublicFormatTarballServes(t *testing.T) {
+	dir := t.TempDir()
+	store := newMemStore()
+	pack, raw := buildPack(time.Now().AddDate(0, 0, -30), []byte("TARBALL"))
+	client := &rawClient{pack: pack, raw: raw, tarball: []byte("TARBALL")}
+	a := newTestAdapter(t, "/npm", dir, 0, client, store)
+	srv := newTestServer(t, a)
+
+	resp, err := http.Get(srv.URL + "/npm/testpkg/-/testpkg-1.0.0.tgz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 200 || string(body) != "TARBALL" {
+		t.Fatalf("code=%d body=%q, want 200 %q", resp.StatusCode, body, "TARBALL")
+	}
+	if len(store.recs) != 1 {
+		t.Fatalf("expected 1 stored record, got %d", len(store.recs))
+	}
+}
