@@ -14,6 +14,14 @@ const e2eFixtures: Fixtures = {
         },
       },
     },
+    {
+      key: 'empty-app',
+      registries: {
+        npm: {
+          validation: [],
+        },
+      },
+    },
   ],
 }
 
