@@ -1,3 +1,5 @@
+import ErrorState from '../components/ErrorState'
+import Loading from '../components/Loading'
 import { useHealth } from '../features/health/useHealth'
 import { useProjects } from '../features/projects/useProjects'
 
@@ -17,14 +19,31 @@ export default function DashboardPage() {
               : 'rounded border border-green-500 bg-green-50 p-4 text-green-800'
           }
         >
-          {health.isLoading && <p>Checking proxy status…</p>}
+          {health.isLoading && <Loading label="Checking proxy status…" />}
           {health.isSuccess && <p>Proxy healthy</p>}
-          {health.isError && <p>Proxy unreachable</p>}
+          {health.isError && (
+            <div className="flex items-center justify-between gap-3">
+              <p>Proxy unreachable</p>
+              <button
+                type="button"
+                onClick={() => health.refetch()}
+                className="rounded bg-red-600 px-2 py-1 text-xs text-white hover:bg-red-700"
+              >
+                Retry
+              </button>
+            </div>
+          )}
         </div>
         <div data-testid="project-count-card" className="rounded border border-gray-200 bg-white p-4">
-          {projects.isLoading && <p>Projects: …</p>}
+          {projects.isLoading && <Loading label="Projects: …" />}
           {projects.isSuccess && <p>Projects: {projects.data.projects.length}</p>}
-          {projects.isError && <p>Projects: unavailable</p>}
+          {projects.isError && (
+            <ErrorState
+              message="Projects: unavailable"
+              onRetry={() => projects.refetch()}
+              testId="projects-error"
+            />
+          )}
         </div>
       </div>
     </div>

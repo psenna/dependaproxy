@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
+import ErrorState from '../components/ErrorState'
+import Loading from '../components/Loading'
 import RegistryConfigEditor from '../components/RegistryConfigEditor'
 import { useProject } from '../features/projects/useProject'
 import { useUpdateProject } from '../features/projects/useUpdateProject'
@@ -116,15 +118,13 @@ export default function ProjectEditPage({ knownRegistries = KNOWN_REGISTRIES }: 
   return (
     <div data-testid="project-edit">
       <h1 className="text-2xl font-bold">Edit project</h1>
-      {project.isLoading && <p data-testid="project-loading">Loading…</p>}
-      {errorMessage && (
-        <div
-          role="alert"
-          data-testid="project-error"
-          className="rounded border border-red-500 bg-red-50 p-3 text-red-800"
-        >
-          {errorMessage}
-        </div>
+      {project.isLoading && <Loading testId="project-loading" />}
+      {project.isError && (
+        <ErrorState
+          message={errorMessage ?? undefined}
+          onRetry={() => project.refetch()}
+          testId="project-error"
+        />
       )}
       {project.isSuccess && (
         <form onSubmit={handleSubmit} className="mt-4 max-w-2xl space-y-4">

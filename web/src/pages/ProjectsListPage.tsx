@@ -2,6 +2,8 @@ import { useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import ConfirmDialog from '../components/ConfirmDialog'
 import EmptyState from '../components/EmptyState'
+import ErrorState from '../components/ErrorState'
+import Loading from '../components/Loading'
 import { useDeleteProject } from '../features/projects/useDeleteProject'
 import { useProjects } from '../features/projects/useProjects'
 import { ApiError, type RegistryConfig } from '../lib/types'
@@ -68,15 +70,13 @@ export default function ProjectsListPage() {
       )}
 
       <div className="mt-4">
-        {projects.isLoading && <p data-testid="projects-loading">Loading projects…</p>}
+        {projects.isLoading && <Loading label="Loading projects…" testId="projects-loading" />}
         {projects.isError && (
-          <div
-            role="alert"
-            data-testid="projects-error"
-            className="rounded border border-red-500 bg-red-50 p-3 text-red-800"
-          >
-            Failed to load projects.
-          </div>
+          <ErrorState
+            message="Failed to load projects."
+            onRetry={() => projects.refetch()}
+            testId="projects-error"
+          />
         )}
         {projects.isSuccess && projects.data.projects.length === 0 && (
           <div data-testid="projects-empty">

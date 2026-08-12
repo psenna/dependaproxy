@@ -119,4 +119,24 @@ describe('ProjectsListPage', () => {
     await user.click(screen.getByRole('button', { name: /^delete$/i }))
     expect(await screen.findByTestId('delete-error')).toHaveTextContent(/invalid project key/i)
   })
+
+  it('retries loading projects after an error', async () => {
+    // useProjects sets retry: 1 at the hook level, which overrides the per-test
+    // QueryClient's retry: false, so the first two requests (initial + automatic
+    // retry) must fail before the manual Retry refetch can succeed.
+    let calls = 0
+    server.use(
+      http.get('*/admin/projects', () => {
+        calls += 1
+        if (calls < 3) return jsonError(500, 'boom')
+        return HttpResponse.json({ projects: [{ key: 'my-app', registries: { npm: {} } }] })
+      }),
+    )
+    const user = userEvent.setup()
+    renderProjects()
+    const error = await screen.findByTestId('projects-error')
+    expect(error).toHaveTextContent('Failed to load projects.')
+    await user.click(screen.getByRole('button', { name: 'Retry' }))
+    expect(await screen.findByTestId('projects-table')).toBeInTheDocument()
+  })
 })

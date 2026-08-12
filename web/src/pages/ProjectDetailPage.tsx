@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import EmptyState from '../components/EmptyState'
+import ErrorState from '../components/ErrorState'
+import Loading from '../components/Loading'
 import { useDependencies } from '../features/dependencies/useDependencies'
 import { useDebouncedValue } from '../features/dependencies/useDebouncedValue'
 import { useProject } from '../features/projects/useProject'
@@ -49,15 +51,13 @@ export default function ProjectDetailPage({ debounceMs = 400 }: { debounceMs?: n
 
   return (
     <div>
-      {project.isLoading && <p data-testid="project-loading">Loading…</p>}
-      {errorMessage && (
-        <div
-          role="alert"
-          data-testid="project-error"
-          className="rounded border border-red-500 bg-red-50 p-3 text-red-800"
-        >
-          {errorMessage}
-        </div>
+      {project.isLoading && <Loading testId="project-loading" />}
+      {project.isError && (
+        <ErrorState
+          message={errorMessage ?? undefined}
+          onRetry={() => project.refetch()}
+          testId="project-error"
+        />
       )}
       {project.isSuccess && (
         <div>
@@ -133,15 +133,15 @@ export default function ProjectDetailPage({ debounceMs = 400 }: { debounceMs?: n
                 />
               </div>
 
-              {dependencies.isLoading && <p data-testid="dependencies-loading">Loading dependencies…</p>}
+              {dependencies.isLoading && (
+                <Loading label="Loading dependencies…" testId="dependencies-loading" />
+              )}
               {dependencies.isError && (
-                <div
-                  role="alert"
-                  data-testid="dependencies-error"
-                  className="mt-4 rounded border border-red-500 bg-red-50 p-3 text-red-800"
-                >
-                  Failed to load dependencies.
-                </div>
+                <ErrorState
+                  message="Failed to load dependencies."
+                  onRetry={() => dependencies.refetch()}
+                  testId="dependencies-error"
+                />
               )}
               {dependencies.isSuccess && dependencies.data.dependencies.length === 0 && (
                 <div data-testid="dependencies-empty" className="mt-4">
