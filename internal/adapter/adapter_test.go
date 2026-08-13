@@ -71,6 +71,24 @@ func TestCVESharedParams(t *testing.T) {
 	if pr := CVESharedParams(cfg); pr != (cveosv.Params{}) {
 		t.Fatalf("malformed params should fall back to zero Params, got %+v", pr)
 	}
+
+	// min_severity is carried through from the winning params.
+	cfg = config.RegistryConfig{
+		Validation: []config.Middleware{
+			{Type: "cve-check", Params: yamlNode("endpoint: http://val.example\nmin_severity: high")},
+		},
+	}
+	if pr := CVESharedParams(cfg); pr.MinSeverity != "high" {
+		t.Fatalf("validation cve-check min_severity should be carried, got %q", pr.MinSeverity)
+	}
+	cfg = config.RegistryConfig{
+		Retrieval: []config.Middleware{
+			{Type: "cve-check-retrieval", Params: yamlNode("endpoint: http://ret.example\nmin_severity: medium")},
+		},
+	}
+	if pr := CVESharedParams(cfg); pr.MinSeverity != "medium" {
+		t.Fatalf("retrieval cve-check-retrieval min_severity should be carried, got %q", pr.MinSeverity)
+	}
 }
 
 func TestBuildUnknownType(t *testing.T) {

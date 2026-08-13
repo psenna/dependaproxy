@@ -132,7 +132,8 @@ registries:
   at validation time. Params: `endpoint` (default `https://api.osv.dev`), `mode:
   deny|warn` (default `deny` → 403), `on_error: fail_open|fail_closed` (default
   `fail_open`), `timeout`, `cache_ttl` (in-memory result cache so repeat installs
-  don't hammer OSV).
+  don't hammer OSV), `min_severity` (only act on advisories at/above this band —
+  `critical|high|medium|low`; default unset = all, `none` = unset).
 - `malware-scan` — static heuristics on the artifact bytes (already fetched by
   the pipeline when validation runs): npm install scripts (`preinstall` /
   `install` / `postinstall`) + suspicious script contents (curl/wget/base64/
@@ -199,7 +200,9 @@ registries:
   `fail_closed` returns a 502, an outage rather than an advisory),
   `timeout`, `cache_ttl` (one OSV call per `cache_ttl` window per
   ecosystem/name/version — a bounded TTL cache shared with the validation
-  `cve-check` via the same `internal/middleware/cveosv` client logic).
+  `cve-check` via the same `internal/middleware/cveosv` client logic),
+  `min_severity` (only act on advisories at/above this band —
+  `critical|high|medium|low`; default unset = all, `none` = unset).
   When both the validation `cve-check` and `cve-check-retrieval` are configured,
   they share one OSV client and its bounded TTL cache per adapter, so the first
   untrusted fetch makes **one** OSV call (the retrieval stage populates the

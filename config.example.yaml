@@ -57,9 +57,12 @@ registries:
       # Reject (or warn about) packages with known vulnerabilities, checked
       # against OSV.dev at validation time. mode: deny (default, 403) | warn
       # (serve + log). on_error: fail_open (default) | fail_closed.
+      # min_severity: only act on advisories at/above this band
+      # (critical|high|medium|low; default unset = all; "none" = unset).
       - type: cve-check
         params:
           mode: deny
+          # min_severity: high
       # Static heuristics on the tarball: npm install scripts + suspicious
       # script contents; pypi setup.py/PKG-INFO patterns + wheel exec files.
       # mode: deny (default, 403) | warn (serve + log).
@@ -101,6 +104,7 @@ registries:
           mode: deny
           on_error: fail_open
           cache_ttl: 1h
+          # min_severity: high
       - type: local-disk-cache
         params:
           path: /var/lib/dependaproxy/cache/npm
@@ -142,6 +146,7 @@ registries:
       - type: cve-check
         params:
           mode: deny
+          # min_severity: high
       - type: malware-scan
         params:
           mode: warn
@@ -171,6 +176,7 @@ registries:
           mode: deny
           on_error: fail_open
           cache_ttl: 1h
+          # min_severity: high
       - type: local-disk-cache
         params:
           path: /var/lib/dependaproxy/cache/pypi
@@ -205,6 +211,7 @@ registries:
         params:
           mode: deny
           on_error: fail_open
+          # min_severity: high
     # deny_list:  # defaults (as in npm) but goproxy has no guarddog-scan or
     #             # malware-scan in its validation chain — only cve-check
     #             # failures can be recorded.

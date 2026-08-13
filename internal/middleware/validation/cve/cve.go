@@ -72,7 +72,7 @@ func (m *Middleware) apply(ctx *pipeline.PipelineContext, vulns []cveosv.Vuln) e
 	if len(vulns) == 0 {
 		return nil
 	}
-	ids := cveosv.VulnIDs(vulns)
+	ids := cveosv.VulnIDsWithSeverity(vulns)
 	switch m.mode {
 	case cveosv.ModeWarn:
 		if ctx.Log != nil {
