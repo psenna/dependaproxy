@@ -19,10 +19,11 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-# Overlay the web build artifact from the web-build stage. .dockerignore
-# excludes the local web/dist, so this is the only source of web/dist in the
-# Go build. Required for //go:embed of the UI (issue #152).
-COPY --from=web-build /src/web/dist /src/web/dist
+# Overlay the web build artifact from the web-build stage into the embed
+# directory. .dockerignore excludes the local web/dist, so this is the only
+# source of the embedded UI in the Go build. Required for //go:embed of the UI
+# (issue #152).
+COPY --from=web-build /src/web/dist /src/internal/webui/dist
 RUN CGO_ENABLED=0 go build -buildvcs=false -trimpath -ldflags "-s -w" -o /out/dependaproxy ./cmd/dependaproxy
 
 # Stage 2: build the GuardDog venv. The guarddog-scan middleware shells out to

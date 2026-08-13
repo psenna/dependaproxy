@@ -17,3 +17,9 @@ web/playwright-report/
 web/test-results/
 web/coverage/
 web/*.tsbuildinfo
+
+# web UI embed build outputs (issue #152). The committed placeholder
+# internal/webui/dist/index.html stays tracked; the real build overwrites it
+# and adds the rest — restore with `git checkout internal/webui/dist/index.html`.
+internal/webui/dist/*
+!internal/webui/dist/index.html
