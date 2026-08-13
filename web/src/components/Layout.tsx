@@ -49,7 +49,7 @@ export default function Layout() {
               aria-expanded={sidebarOpen}
               aria-controls="sidebar"
               onClick={() => setSidebarOpen((open) => !open)}
-              className="rounded border border-gray-300 p-1.5 md:hidden"
+              className="dp-btn-secondary md:hidden"
             >
               <svg
                 aria-hidden="true"
@@ -69,7 +69,7 @@ export default function Layout() {
             <button
               type="button"
               onClick={handleLogout}
-              className="rounded border border-gray-300 px-3 py-1 text-sm hover:bg-gray-100"
+              className="dp-btn-secondary"
             >
               Logout
             </button>

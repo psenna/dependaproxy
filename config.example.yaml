@@ -18,6 +18,15 @@ auth:
   # `Authorization: Bearer <admin_token>`.
   admin_token: "change-me-admin"
 
+# ---------------------------------------------------------------------------
+# Web UI / admin dashboard
+# ---------------------------------------------------------------------------
+# The dashboard is a React + Vite SPA embedded into the Go binary (//go:embed)
+# and served at / (and /admin) by the same process that serves the registries.
+# It is gated by `auth.admin_token` above — the registry `auth.token` alone
+# cannot open it. A blank admin_token disables the dashboard: every admin API
+# call returns 401 and the login page shows a "not configured" message.
+
 # Shared PostgreSQL backend (one pool; each adapter owns its table).
 storage:
   type: postgres

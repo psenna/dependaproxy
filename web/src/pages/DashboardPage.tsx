@@ -27,14 +27,14 @@ export default function DashboardPage() {
               <button
                 type="button"
                 onClick={() => health.refetch()}
-                className="rounded bg-red-600 px-2 py-1 text-xs text-white hover:bg-red-700"
+                className="dp-btn-danger text-xs"
               >
                 Retry
               </button>
             </div>
           )}
         </div>
-        <div data-testid="project-count-card" className="rounded border border-gray-200 bg-white p-4">
+        <div data-testid="project-count-card" className="dp-card">
           {projects.isLoading && <Loading label="Projects: …" />}
           {projects.isSuccess && <p>Projects: {projects.data.projects.length}</p>}
           {projects.isError && (

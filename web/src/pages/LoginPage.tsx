@@ -44,7 +44,7 @@ export default function LoginPage() {
           value={token}
           onChange={(e) => setToken(e.target.value)}
           placeholder="Admin token"
-          className="mb-4 w-full rounded border px-3 py-2"
+          className="mb-4 w-full dp-input"
           autoComplete="current-password"
         />
         {error && (
@@ -55,7 +55,7 @@ export default function LoginPage() {
         <button
           type="submit"
           disabled={!token || submitting}
-          className="w-full rounded bg-blue-600 px-3 py-2 text-white disabled:opacity-50"
+          className="w-full dp-btn-primary disabled:opacity-50"
         >
           {submitting ? 'Signing in…' : 'Sign in'}
         </button>

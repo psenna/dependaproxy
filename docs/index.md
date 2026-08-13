@@ -68,6 +68,8 @@ the published Docker image, and pointing `npm`/`pip` at the proxy. See
   a gate in action.
 - [Configuration](configuration) — config fields, registries, and middleware
   types by stage.
+- [Dashboard](dashboard) — the embedded web UI / admin dashboard: access,
+  login, screens, and the web development workflow.
 - [Development](development) — Makefile targets, the Docker-in-Docker build
   pattern, and the gated integration tests.
 

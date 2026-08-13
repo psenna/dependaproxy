@@ -53,7 +53,7 @@ export default function ProjectsListPage() {
         <h1 className="text-2xl font-bold">Projects</h1>
         <Link
           to="/projects/new"
-          className="rounded bg-blue-600 px-3 py-1.5 text-sm text-white hover:bg-blue-700"
+          className="dp-btn-primary"
         >
           New project
         </Link>
@@ -86,7 +86,7 @@ export default function ProjectsListPage() {
             >
               <Link
                 to="/projects/new"
-                className="rounded bg-blue-600 px-3 py-1.5 text-sm text-white hover:bg-blue-700"
+                className="dp-btn-primary"
               >
                 Create project
               </Link>
@@ -97,7 +97,7 @@ export default function ProjectsListPage() {
           <div className="overflow-x-auto">
             <table data-testid="projects-table" className="w-full border-collapse text-left text-sm">
               <thead>
-                <tr className="border-b text-gray-500">
+                <tr className="border-b border-gray-200 text-gray-500">
                   <th scope="col" className="py-2 pr-4 font-medium">
                     Key
                   </th>
@@ -111,7 +111,7 @@ export default function ProjectsListPage() {
               </thead>
               <tbody>
                 {projects.data.projects.map((project) => (
-                  <tr key={project.key} data-testid={`project-row-${project.key}`} className="border-b">
+                  <tr key={project.key} data-testid={`project-row-${project.key}`} className="border-b border-gray-200">
                     <td className="py-2 pr-4 font-medium">{project.key}</td>
                     <td className="py-2 pr-4" data-testid={`project-registries-${project.key}`}>
                       {registriesSummary(project.registries)}
@@ -139,7 +139,7 @@ export default function ProjectsListPage() {
                             setDeleteError(null)
                             setPendingDeleteKey(project.key)
                           }}
-                          className="text-red-600 hover:underline"
+                          className="dp-btn-ghost text-red-600"
                         >
                           Delete {project.key}
                         </button>

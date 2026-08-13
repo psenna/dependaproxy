@@ -63,7 +63,7 @@ export default function ConfirmDialog({
 
   if (!open) return null
 
-  const confirmClass = confirmTone === 'danger' ? 'bg-red-500 text-white' : 'bg-blue-600 text-white'
+  const confirmClass = confirmTone === 'danger' ? 'dp-btn-danger' : 'dp-btn-primary'
 
   return (
     <div
@@ -86,7 +86,7 @@ export default function ConfirmDialog({
           <button
             type="button"
             onClick={onCancel}
-            className="rounded border border-gray-300 px-3 py-1.5 text-sm hover:bg-gray-100"
+            className="dp-btn-secondary"
           >
             {cancelLabel}
           </button>
@@ -94,7 +94,7 @@ export default function ConfirmDialog({
             type="button"
             ref={confirmRef}
             onClick={onConfirm}
-            className={`rounded px-3 py-1.5 text-sm ${confirmClass}`}
+            className={confirmClass}
           >
             {confirmLabel}
           </button>

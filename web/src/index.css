@@ -1,1 +1,33 @@
 @import "tailwindcss";
+
+@layer base {
+  :focus-visible {
+    outline: 2px solid theme(--color-blue-500);
+    outline-offset: 2px;
+    border-radius: 2px;
+  }
+}
+
+@layer components {
+  .dp-card {
+    @apply rounded border border-gray-200 bg-white p-4;
+  }
+  .dp-input {
+    @apply rounded border border-gray-300 px-2 py-1 text-sm;
+  }
+  .dp-btn {
+    @apply rounded px-3 py-1.5 text-sm font-medium;
+  }
+  .dp-btn-primary {
+    @apply rounded bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700;
+  }
+  .dp-btn-secondary {
+    @apply rounded border border-gray-300 px-3 py-1.5 text-sm font-medium hover:bg-gray-100;
+  }
+  .dp-btn-danger {
+    @apply rounded bg-red-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-700;
+  }
+  .dp-btn-ghost {
+    @apply rounded px-3 py-1.5 text-sm font-medium;
+  }
+}
