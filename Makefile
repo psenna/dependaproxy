@@ -57,7 +57,7 @@ GOLANGCI_LINT_VERSION := v2.12.2
 GOVULNCHECK_VERSION   := latest
 
 .PHONY: all test vet fmt-check lint vuln tidy run db stop-db minio stop-minio clean \
-	web-install web-build web-test web-lint web-format web-e2e
+	web-install web-build web-unit web-test web-lint web-format web-e2e build-image
 
 all: vet fmt-check test
 
@@ -127,11 +127,15 @@ clean:
 web-install:
 	$(DOCKER_RUN_WEB) npm ci
 
+# Self-contained: installs deps then builds, so it works on a clean checkout.
 web-build:
-	$(DOCKER_RUN_WEB) npm run build
+	$(DOCKER_RUN_WEB) sh -c 'npm ci && npm run build'
 
-web-test:
+web-unit:
 	$(DOCKER_RUN_WEB) npm test
+
+# Full web gate: lint + unit + e2e.
+web-test: web-lint web-unit web-e2e
 
 web-lint:
 	$(DOCKER_RUN_WEB) npm run lint
@@ -141,3 +145,8 @@ web-format:
 
 web-e2e:
 	$(DOCKER_RUN_E2E) sh -c 'npx playwright install chromium && npm run e2e'
+
+# Build the full Docker image (web-build first so web/dist exists locally too;
+# the Dockerfile's web-build stage re-runs the web build for the embed in #152).
+build-image: web-build
+	$(DOCKER) build -t dependaproxy:dev .

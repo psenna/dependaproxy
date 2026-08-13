@@ -1,11 +1,28 @@
 # DependaProxy — multi-stage, static, CGo-free build.
 #
+# Stage 0: build the web UI (Vite + React + TS). Produces /src/web/dist, which
+# the Go build stage embeds via //go:embed (issue #152). node:22-alpine (not
+# node:20-alpine) because vite 8 requires node ^20.19.0 || >=22.12.0 and this
+# matches the Makefile NODE_IMAGE. In CI npm uses the public registry; local
+# DinD builds route npm through dependaproxy via the Makefile web-build target.
+FROM node:22-alpine AS web-build
+WORKDIR /src/web
+# Copy the manifest + lockfile first for layer caching.
+COPY web/package.json web/package-lock.json ./
+RUN npm ci --no-audit --no-fund
+COPY web/ .
+RUN npm run build
+
 # Stage 1: build the binary with the pinned Go toolchain.
 FROM golang:1.25 AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
+# Overlay the web build artifact from the web-build stage. .dockerignore
+# excludes the local web/dist, so this is the only source of web/dist in the
+# Go build. Required for //go:embed of the UI (issue #152).
+COPY --from=web-build /src/web/dist /src/web/dist
 RUN CGO_ENABLED=0 go build -buildvcs=false -trimpath -ldflags "-s -w" -o /out/dependaproxy ./cmd/dependaproxy
 
 # Stage 2: build the GuardDog venv. The guarddog-scan middleware shells out to
