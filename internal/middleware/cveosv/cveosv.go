@@ -11,7 +11,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -35,6 +37,46 @@ const (
 	OnErrorFailOpen   = "fail_open"
 	OnErrorFailClosed = "fail_closed"
 )
+
+// Severity bands used for min_severity filtering and ID[band] rendering.
+const (
+	SeverityCritical = "critical"
+	SeverityHigh     = "high"
+	SeverityMedium   = "medium"
+	SeverityLow      = "low"
+	SeverityNone     = "none"
+	SeverityUnknown  = "unknown"
+)
+
+// SeverityRank maps a severity band to an ordering so min_severity thresholds
+// can be compared. Unknown/unrecognized bands rank 0 (below low).
+func SeverityRank(s string) int {
+	switch s {
+	case SeverityCritical:
+		return 4
+	case SeverityHigh:
+		return 3
+	case SeverityMedium:
+		return 2
+	case SeverityLow:
+		return 1
+	default:
+		return 0
+	}
+}
+
+// DefaultedMinSeverity normalizes a min_severity param: lowercase + trim, and
+// only critical/high/medium/low are accepted. Empty, "none", and unrecognized
+// values all mean "no threshold" (return ""), so "none" is equivalent to unset.
+func DefaultedMinSeverity(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	switch s {
+	case SeverityCritical, SeverityHigh, SeverityMedium, SeverityLow:
+		return s
+	default:
+		return ""
+	}
+}
 
 // DefaultedEndpoint returns e, or DefaultEndpoint when e is empty. It lets
 // callers that share a pre-built Client apply the same per-field defaulting
@@ -63,11 +105,31 @@ func DefaultedOnError(o string) string {
 }
 
 // Vuln is one vulnerability record in an OSV query response. Only the fields
-// surfaced in deny/warn messages are kept.
+// surfaced in deny/warn messages are kept. Severity is the derived band
+// (critical/high/medium/low/unknown) and is never serialized back to OSV.
 type Vuln struct {
-	ID      string   `json:"id"`
-	Summary string   `json:"summary"`
-	Aliases []string `json:"aliases"`
+	ID       string   `json:"id"`
+	Summary  string   `json:"summary"`
+	Aliases  []string `json:"aliases"`
+	Severity string   `json:"-"`
+}
+
+// osvSeverity is one entry in an OSV vuln's "severity" array (a CVSS vector).
+type osvSeverity struct {
+	Type  string `json:"type"`
+	Score string `json:"score"`
+}
+
+// osvRawVuln is the full OSV vuln record as returned by /v1/query. Only the
+// fields needed to derive a severity band are kept.
+type osvRawVuln struct {
+	ID               string        `json:"id"`
+	Summary          string        `json:"summary"`
+	Aliases          []string      `json:"aliases"`
+	Severity         []osvSeverity `json:"severity"`
+	DatabaseSpecific struct {
+		Severity string `json:"severity"`
+	} `json:"database_specific"`
 }
 
 // QueryRequest is the body POSTed to OSV /v1/query.
@@ -85,14 +147,15 @@ type QueryResponse struct {
 }
 
 // Params is the shared yaml-decoded configuration for an OSV-backed middleware
-// (endpoint/mode/on_error/timeout/cache_ttl). Both cve-check and
+// (endpoint/mode/on_error/timeout/cache_ttl/min_severity). Both cve-check and
 // cve-check-retrieval decode their params into this type.
 type Params struct {
-	Endpoint string        `yaml:"endpoint"`
-	Mode     string        `yaml:"mode"`
-	OnError  string        `yaml:"on_error"`
-	Timeout  time.Duration `yaml:"timeout"`
-	CacheTTL time.Duration `yaml:"cache_ttl"`
+	Endpoint    string        `yaml:"endpoint"`
+	Mode        string        `yaml:"mode"`
+	OnError     string        `yaml:"on_error"`
+	Timeout     time.Duration `yaml:"timeout"`
+	CacheTTL    time.Duration `yaml:"cache_ttl"`
+	MinSeverity string        `yaml:"min_severity"`
 }
 
 // Ecosystem maps a pipeline registry name to an OSV ecosystem. Only registries
@@ -182,11 +245,12 @@ func (c *Cache) purgeExpiredLocked() {
 // Client queries OSV.dev and caches results in a bounded TTL cache. It is safe
 // for concurrent use.
 type Client struct {
-	endpoint   string
-	mode       string
-	onError    string
-	httpClient *http.Client
-	cache      *Cache
+	endpoint    string
+	mode        string
+	onError     string
+	minSeverity string
+	httpClient  *http.Client
+	cache       *Cache
 }
 
 // NewClient builds a Client with the same defaulting as the original cve.New:
@@ -212,11 +276,12 @@ func NewClient(pr Params, client *http.Client, now func() time.Time) *Client {
 		client = &http.Client{Timeout: timeout}
 	}
 	return &Client{
-		endpoint:   endpoint,
-		mode:       mode,
-		onError:    onError,
-		httpClient: client,
-		cache:      NewCache(ttl, DefaultCacheMax, now),
+		endpoint:    endpoint,
+		mode:        mode,
+		onError:     onError,
+		minSeverity: DefaultedMinSeverity(pr.MinSeverity),
+		httpClient:  client,
+		cache:       NewCache(ttl, DefaultCacheMax, now),
 	}
 }
 
@@ -263,14 +328,26 @@ func (c *Client) queryHTTP(ctx context.Context, ecosystem, name, version string)
 		return nil, fmt.Errorf("cve-check: OSV returned %s", resp.Status)
 	}
 
-	var parsed QueryResponse
+	var parsed struct {
+		Vulns []osvRawVuln `json:"vulns"`
+	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&parsed); err != nil {
 		return nil, fmt.Errorf("cve-check: decode OSV response: %w", err)
 	}
-	if parsed.Vulns == nil {
-		return []Vuln{}, nil
+	out := make([]Vuln, 0, len(parsed.Vulns))
+	for _, raw := range parsed.Vulns {
+		out = append(out, Vuln{
+			ID:       raw.ID,
+			Summary:  raw.Summary,
+			Aliases:  raw.Aliases,
+			Severity: computeSeverity(raw),
+		})
 	}
-	return parsed.Vulns, nil
+	out = filterBySeverity(out, c.minSeverity)
+	if out == nil {
+		out = []Vuln{}
+	}
+	return out, nil
 }
 
 // Endpoint returns the configured (defaulted) OSV endpoint.
@@ -281,6 +358,9 @@ func (c *Client) Mode() string { return c.mode }
 
 // OnError returns the configured (defaulted) on_error policy.
 func (c *Client) OnError() string { return c.onError }
+
+// MinSeverity returns the normalized min_severity threshold ("" = no filter).
+func (c *Client) MinSeverity() string { return c.minSeverity }
 
 // HTTPClient returns the HTTP client used for OSV queries.
 func (c *Client) HTTPClient() *http.Client { return c.httpClient }
@@ -297,14 +377,241 @@ func VulnIDs(vulns []Vuln) []string {
 	return ids
 }
 
+// VulnIDsWithSeverity returns the ID of every vuln, preserving order, with the
+// severity band appended as "ID[band]" for known bands. Unknown/empty bands
+// render as the bare ID.
+func VulnIDsWithSeverity(vulns []Vuln) []string {
+	ids := make([]string, 0, len(vulns))
+	for _, v := range vulns {
+		if v.Severity != "" && v.Severity != SeverityUnknown {
+			ids = append(ids, v.ID+"["+v.Severity+"]")
+		} else {
+			ids = append(ids, v.ID)
+		}
+	}
+	return ids
+}
+
+// VulnIDsForDisplay returns the vuln IDs rendered for human-facing messages.
+// When minSeverity is set (a threshold is active) the severity band is appended
+// as "ID[band]" via VulnIDsWithSeverity; when minSeverity is empty (unset/none)
+// bare IDs are returned via VulnIDs, byte-for-byte identical to the
+// pre-min_severity behavior.
+func VulnIDsForDisplay(vulns []Vuln, minSeverity string) []string {
+	if minSeverity == "" {
+		return VulnIDs(vulns)
+	}
+	return VulnIDsWithSeverity(vulns)
+}
+
 // BuildDenyMessage formats the deny-mode error text:
 // "<name>@<version> has known vulnerabilities: <ids>", plus the first vuln's
-// summary in parentheses when present. The caller prefixes its own middleware
-// name (e.g. "cve-check: " or "cve-check-retrieval: ").
-func BuildDenyMessage(name, version string, vulns []Vuln) string {
-	msg := fmt.Sprintf("%s@%s has known vulnerabilities: %s", name, version, strings.Join(VulnIDs(vulns), ","))
+// summary in parentheses when present. IDs render as "ID[band]" when a
+// min_severity threshold is active (minSeverity != ""); otherwise bare IDs are
+// rendered, matching the pre-min_severity behavior. The caller prefixes its
+// own middleware name (e.g. "cve-check: " or "cve-check-retrieval: ").
+func BuildDenyMessage(name, version string, vulns []Vuln, minSeverity string) string {
+	msg := fmt.Sprintf("%s@%s has known vulnerabilities: %s", name, version, strings.Join(VulnIDsForDisplay(vulns, minSeverity), ","))
 	if len(vulns) > 0 && vulns[0].Summary != "" {
 		msg += " (" + vulns[0].Summary + ")"
 	}
 	return msg
+}
+
+// filterBySeverity drops vulns below the min_severity threshold. An empty
+// threshold (or "none", which normalizes to "") keeps everything.
+func filterBySeverity(vulns []Vuln, minSeverity string) []Vuln {
+	if minSeverity == "" {
+		return vulns
+	}
+	threshold := SeverityRank(minSeverity)
+	if threshold <= 0 {
+		return vulns
+	}
+	kept := make([]Vuln, 0, len(vulns))
+	for _, v := range vulns {
+		if SeverityRank(v.Severity) >= threshold {
+			kept = append(kept, v)
+		}
+	}
+	return kept
+}
+
+// computeSeverity derives a severity band for one raw OSV vuln: the highest
+// CVSS_V3/CVSS_V4 base score wins; otherwise the database_specific.severity
+// (case-insensitive, MODERATE → medium); otherwise unknown.
+func computeSeverity(raw osvRawVuln) string {
+	best := -1.0
+	for _, sev := range raw.Severity {
+		if sev.Type != "CVSS_V3" && sev.Type != "CVSS_V4" {
+			continue
+		}
+		if score, ok := parseCVSSBaseScore(sev.Score); ok && score > best {
+			best = score
+		}
+	}
+	if best >= 0 {
+		return bandFromScore(best)
+	}
+	s := strings.ToLower(strings.TrimSpace(raw.DatabaseSpecific.Severity))
+	if s == "moderate" {
+		return SeverityMedium
+	}
+	switch s {
+	case SeverityCritical, SeverityHigh, SeverityMedium, SeverityLow:
+		return s
+	default:
+		return SeverityUnknown
+	}
+}
+
+// bandFromScore maps a CVSS base score to a severity band.
+func bandFromScore(score float64) string {
+	switch {
+	case score >= 9:
+		return SeverityCritical
+	case score >= 7:
+		return SeverityHigh
+	case score >= 4:
+		return SeverityMedium
+	default:
+		return SeverityLow
+	}
+}
+
+// parseCVSSBaseScore parses a CVSS vector and returns its base score. It
+// supports CVSS v3.1 vectors (AV/AC/PR/UI/S/C/I/A) and CVSS v4 vectors
+// (AV/AC/AT/PR/UI/VC/VI/VA/SC/SI/SA). A v4 vector's explicit BS component wins
+// when present; otherwise the v3.1 equation is applied with the v4 VC/VI/VA
+// metrics mapped onto C/I/A. ok is false for malformed vectors.
+func parseCVSSBaseScore(vector string) (float64, bool) {
+	metrics := map[string]string{}
+	for _, part := range strings.Split(vector, "/") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		kv := strings.SplitN(part, ":", 2)
+		if len(kv) != 2 {
+			return 0, false
+		}
+		metrics[strings.ToUpper(strings.TrimSpace(kv[0]))] = strings.ToUpper(strings.TrimSpace(kv[1]))
+	}
+	if len(metrics) == 0 {
+		return 0, false
+	}
+	if bs, ok := metrics["BS"]; ok {
+		score, err := strconv.ParseFloat(bs, 64)
+		if err != nil {
+			return 0, false
+		}
+		return clampScore(score), true
+	}
+
+	av, ok := metricValue(metrics, "AV", map[string]float64{"N": 0.85, "A": 0.62, "L": 0.55, "P": 0.2})
+	if !ok {
+		return 0, false
+	}
+	ac, ok := metricValue(metrics, "AC", map[string]float64{"L": 0.77, "H": 0.44})
+	if !ok {
+		return 0, false
+	}
+	ui, ok := metricValue(metrics, "UI", map[string]float64{"N": 0.85, "R": 0.62})
+	if !ok {
+		return 0, false
+	}
+	scope := metrics["S"]
+	if scope == "" {
+		scope = "U" // v4 has no scope component
+	}
+	prTable := map[string]float64{"N": 0.85, "L": 0.62, "H": 0.27}
+	if scope == "C" {
+		prTable = map[string]float64{"N": 0.85, "L": 0.68, "H": 0.5}
+	}
+	pr, ok := metricValue(metrics, "PR", prTable)
+	if !ok {
+		return 0, false
+	}
+
+	conf, integ, avail := 0.0, 0.0, 0.0
+	if _, hasVC := metrics["VC"]; hasVC {
+		conf, ok = metricValue(metrics, "VC", ciaTable)
+		if !ok {
+			return 0, false
+		}
+		integ, ok = metricValue(metrics, "VI", ciaTable)
+		if !ok {
+			return 0, false
+		}
+		avail, ok = metricValue(metrics, "VA", ciaTable)
+		if !ok {
+			return 0, false
+		}
+	} else {
+		conf, ok = metricValue(metrics, "C", ciaTable)
+		if !ok {
+			return 0, false
+		}
+		integ, ok = metricValue(metrics, "I", ciaTable)
+		if !ok {
+			return 0, false
+		}
+		avail, ok = metricValue(metrics, "A", ciaTable)
+		if !ok {
+			return 0, false
+		}
+	}
+
+	iss := 1 - (1-conf)*(1-integ)*(1-avail)
+	var impact float64
+	if scope == "C" {
+		impact = 7.52*(iss-0.029) - 3.25*math.Pow(iss-0.02, 15)
+	} else {
+		impact = 6.42 * iss
+	}
+	if impact <= 0 {
+		return 0, true
+	}
+	exploitability := 8.22 * av * ac * pr * ui
+	var base float64
+	if scope == "C" {
+		base = roundup(1.08 * (impact + exploitability))
+	} else {
+		base = roundup(impact + exploitability)
+	}
+	return clampScore(base), true
+}
+
+// ciaTable maps the C/I/A (and v4 VC/VI/VA) metric values to their CVSS v3.1
+// impact weights.
+var ciaTable = map[string]float64{"H": 0.56, "L": 0.22, "N": 0.0}
+
+// metricValue looks up key in metrics and maps its value through table.
+func metricValue(metrics map[string]string, key string, table map[string]float64) (float64, bool) {
+	v, ok := metrics[key]
+	if !ok {
+		return 0, false
+	}
+	score, ok := table[v]
+	return score, ok
+}
+
+// roundup implements the CVSS v3.1 Roundup function.
+func roundup(x float64) float64 {
+	intInput := math.Round(x * 100000)
+	if math.Mod(intInput, 10000) == 0 {
+		return intInput / 100000
+	}
+	return (math.Floor(intInput/10000) + 1) / 10
+}
+
+// clampScore bounds a base score to the CVSS [0,10] range.
+func clampScore(score float64) float64 {
+	if score < 0 {
+		return 0
+	}
+	if score > 10 {
+		return 10
+	}
+	return score
 }

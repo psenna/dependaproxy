@@ -47,6 +47,29 @@ func osvServer(t *testing.T, ids []string) (*httptest.Server, *atomic.Int64) {
 	return srv, &hits
 }
 
+// osvServerRaw spins up a fake OSV endpoint returning the given raw vuln maps
+// (so tests can exercise database_specific.severity) for any query, and counts
+// how many times it is hit.
+func osvServerRaw(t *testing.T, raws []map[string]any) (*httptest.Server, *atomic.Int64) {
+	t.Helper()
+	var hits atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		if r.URL.Path != "/v1/query" {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		var req osvQueryRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"vulns": raws})
+	}))
+	t.Cleanup(srv.Close)
+	return srv, &hits
+}
+
 func TestDenyRejectsVulnerable(t *testing.T) {
 	srv, _ := osvServer(t, []string{"CVE-2021-1234", "GHSA-abc"})
 	m := New(params{Endpoint: srv.URL}, nil, func() time.Time { return time.Now().UTC() })
@@ -231,5 +254,83 @@ func TestFactoryDecodesParams(t *testing.T) {
 	}
 	if m.cache.TTL != defaultCacheTTL {
 		t.Fatalf("cache_ttl should default, got %v", m.cache.TTL)
+	}
+}
+
+func TestDenyRespectsMinSeverity(t *testing.T) {
+	// A low-severity advisory below the min_severity: high threshold is filtered
+	// out, so the version passes.
+	srv, _ := osvServerRaw(t, []map[string]any{
+		{"id": "CVE-2021-1234", "database_specific": map[string]any{"severity": "LOW"}},
+	})
+	m := New(params{Endpoint: srv.URL, MinSeverity: "high"}, nil, func() time.Time { return time.Now().UTC() })
+	if err := m.Validate(testCtx("lodash", "4.17.20")); err != nil {
+		t.Fatalf("low-severity vuln below threshold should pass, got %v", err)
+	}
+
+	// A high-severity advisory at/above the threshold is denied.
+	srv2, _ := osvServerRaw(t, []map[string]any{
+		{"id": "CVE-2021-1234", "database_specific": map[string]any{"severity": "HIGH"}},
+	})
+	m2 := New(params{Endpoint: srv2.URL, MinSeverity: "high"}, nil, func() time.Time { return time.Now().UTC() })
+	err := m2.Validate(testCtx("lodash", "4.17.20"))
+	if err == nil {
+		t.Fatal("high-severity vuln at/above threshold should be denied")
+	}
+	if !strings.Contains(err.Error(), "CVE-2021-1234[high]") {
+		t.Fatalf("deny message should render ID[band], got: %v", err)
+	}
+}
+
+func TestWarnRespectsMinSeverity(t *testing.T) {
+	srv, _ := osvServerRaw(t, []map[string]any{
+		{"id": "CVE-LOW", "database_specific": map[string]any{"severity": "LOW"}},
+		{"id": "CVE-HIGH", "database_specific": map[string]any{"severity": "HIGH"}},
+	})
+	m := New(params{Endpoint: srv.URL, Mode: "warn", MinSeverity: "high"}, nil, func() time.Time { return time.Now().UTC() })
+	ctx := testCtx("lodash", "4.17.20")
+	if err := m.Validate(ctx); err != nil {
+		t.Fatalf("warn mode should accept, got %v", err)
+	}
+	got, ok := ctx.Metadata["cve"].([]string)
+	if !ok || len(got) != 1 || got[0] != "CVE-HIGH[high]" {
+		t.Fatalf("warn mode should record only at/above-threshold vulns with bands, got %#v", ctx.Metadata["cve"])
+	}
+}
+
+// TestUnsetThresholdBareIDs locks in the byte-for-byte backward-compat
+// guarantee: with min_severity unset and real severity data present (a CVSS
+// vector that resolves to a known band), the deny message and warn metadata
+// must render bare IDs (no "[band]" suffix), identical to the pre-min_severity
+// behavior.
+func TestUnsetThresholdBareIDs(t *testing.T) {
+	raw := []map[string]any{
+		{"id": "CVE-2021-1234", "summary": "arbitrary code execution",
+			"severity": []map[string]any{{"type": "CVSS_V3", "score": "AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"}}},
+	}
+	// deny: the error message lists the bare ID, no [critical] suffix.
+	srv, _ := osvServerRaw(t, raw)
+	m := New(params{Endpoint: srv.URL}, nil, func() time.Time { return time.Now().UTC() })
+	err := m.Validate(testCtx("lodash", "4.17.20"))
+	if err == nil {
+		t.Fatal("vulnerable version should be denied")
+	}
+	if strings.Contains(err.Error(), "CVE-2021-1234[") {
+		t.Fatalf("unset threshold should render bare IDs, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "CVE-2021-1234") {
+		t.Fatalf("deny message should list the vuln ID, got: %v", err)
+	}
+
+	// warn: metadata records the bare ID, no [critical] suffix.
+	srv2, _ := osvServerRaw(t, raw)
+	m2 := New(params{Endpoint: srv2.URL, Mode: "warn"}, nil, func() time.Time { return time.Now().UTC() })
+	ctx := testCtx("lodash", "4.17.20")
+	if err := m2.Validate(ctx); err != nil {
+		t.Fatalf("warn mode should accept, got %v", err)
+	}
+	got, ok := ctx.Metadata["cve"].([]string)
+	if !ok || len(got) != 1 || got[0] != "CVE-2021-1234" {
+		t.Fatalf("unset threshold should record bare ID in metadata, got %#v", ctx.Metadata["cve"])
 	}
 }

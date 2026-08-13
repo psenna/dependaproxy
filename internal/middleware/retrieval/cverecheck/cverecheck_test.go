@@ -62,6 +62,29 @@ func osvServer(t *testing.T, vulns []cveosv.Vuln) (*httptest.Server, *atomic.Int
 	return srv, &hits
 }
 
+// osvServerRaw spins up a fake OSV endpoint returning the given raw vuln maps
+// (so tests can exercise database_specific.severity) for any query, and counts
+// how many times it is hit.
+func osvServerRaw(t *testing.T, raws []map[string]any) (*httptest.Server, *atomic.Int64) {
+	t.Helper()
+	var hits atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		if r.URL.Path != "/v1/query" {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		var req cveosv.QueryRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"vulns": raws})
+	}))
+	t.Cleanup(srv.Close)
+	return srv, &hits
+}
+
 // osv500Server always returns 500 on /v1/query.
 func osv500Server(t *testing.T) *httptest.Server {
 	t.Helper()
@@ -360,5 +383,90 @@ func TestFactoryEmptyParams(t *testing.T) {
 	}
 	if mw.Name() != "cve-check-retrieval" {
 		t.Errorf("name = %q", mw.Name())
+	}
+}
+
+func TestDenyRespectsMinSeverity(t *testing.T) {
+	// A low-severity advisory below the min_severity: high threshold is filtered
+	// out, so the artifact is served.
+	srv, _ := osvServerRaw(t, []map[string]any{
+		{"id": "CVE-2026-9999", "database_specific": map[string]any{"severity": "LOW"}},
+	})
+	next := &fakeNext{hit: true, data: []byte("BYTES")}
+	m := New(cveosv.Params{Endpoint: srv.URL, MinSeverity: "high"}, nil, next, fixedNow())
+	ctx := testCtx("npm", "lodash", "4.17.20")
+	hit, err := m.Fetch(ctx)
+	if err != nil || !hit {
+		t.Fatalf("low-severity vuln below threshold should serve, got hit=%v err=%v", hit, err)
+	}
+
+	// A high-severity advisory at/above the threshold is denied.
+	srv2, _ := osvServerRaw(t, []map[string]any{
+		{"id": "CVE-2026-9999", "database_specific": map[string]any{"severity": "HIGH"}},
+	})
+	m2 := New(cveosv.Params{Endpoint: srv2.URL, MinSeverity: "high"}, nil, &fakeNext{hit: true, data: []byte("BYTES")}, fixedNow())
+	hit, err = m2.Fetch(testCtx("npm", "lodash", "4.17.20"))
+	if err == nil || hit {
+		t.Fatalf("high-severity vuln at/above threshold should be denied, got hit=%v err=%v", hit, err)
+	}
+	if !errors.Is(err, pipeline.ErrRejected) {
+		t.Fatalf("err should wrap ErrRejected, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "CVE-2026-9999[high]") {
+		t.Fatalf("deny message should render ID[band], got: %v", err)
+	}
+}
+
+func TestWarnRespectsMinSeverity(t *testing.T) {
+	srv, _ := osvServerRaw(t, []map[string]any{
+		{"id": "CVE-LOW", "database_specific": map[string]any{"severity": "LOW"}},
+		{"id": "CVE-HIGH", "database_specific": map[string]any{"severity": "HIGH"}},
+	})
+	next := &fakeNext{hit: true, data: []byte("BYTES")}
+	m := New(cveosv.Params{Endpoint: srv.URL, Mode: "warn", MinSeverity: "high"}, nil, next, fixedNow())
+	ctx := testCtx("npm", "lodash", "4.17.20")
+	hit, err := m.Fetch(ctx)
+	if err != nil || !hit {
+		t.Fatalf("warn should serve, got hit=%v err=%v", hit, err)
+	}
+	got, ok := ctx.Metadata["cve-retrieval"].([]string)
+	if !ok || len(got) != 1 || got[0] != "CVE-HIGH[high]" {
+		t.Fatalf("warn should record only at/above-threshold vulns with bands, got %#v", ctx.Metadata["cve-retrieval"])
+	}
+}
+
+// TestUnsetThresholdBareIDs locks in byte-for-byte backward compat: with
+// min_severity unset and real severity data present (a CVSS vector resolving
+// to a known band), the deny message and warn metadata must render bare IDs,
+// identical to the pre-min_severity behavior.
+func TestUnsetThresholdBareIDs(t *testing.T) {
+	raw := []map[string]any{
+		{"id": "CVE-2026-9999", "summary": "arbitrary code execution",
+			"severity": []map[string]any{{"type": "CVSS_V3", "score": "AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"}}},
+	}
+	// deny: error message lists the bare ID, no [critical] suffix.
+	srv, _ := osvServerRaw(t, raw)
+	m := New(cveosv.Params{Endpoint: srv.URL}, nil, &fakeNext{hit: true, data: []byte("BYTES")}, fixedNow())
+	_, err := m.Fetch(testCtx("npm", "lodash", "4.17.20"))
+	if err == nil {
+		t.Fatal("vulnerable version should be denied")
+	}
+	if strings.Contains(err.Error(), "CVE-2026-9999[") {
+		t.Fatalf("unset threshold should render bare IDs, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "CVE-2026-9999") {
+		t.Fatalf("deny message should list the vuln ID, got: %v", err)
+	}
+
+	// warn: metadata records the bare ID, no [critical] suffix.
+	srv2, _ := osvServerRaw(t, raw)
+	m2 := New(cveosv.Params{Endpoint: srv2.URL, Mode: "warn"}, nil, &fakeNext{hit: true, data: []byte("BYTES")}, fixedNow())
+	ctx := testCtx("npm", "lodash", "4.17.20")
+	if _, err := m2.Fetch(ctx); err != nil {
+		t.Fatalf("warn should serve, got %v", err)
+	}
+	got, ok := ctx.Metadata["cve-retrieval"].([]string)
+	if !ok || len(got) != 1 || got[0] != "CVE-2026-9999" {
+		t.Fatalf("unset threshold should record bare ID in metadata, got %#v", ctx.Metadata["cve-retrieval"])
 	}
 }
