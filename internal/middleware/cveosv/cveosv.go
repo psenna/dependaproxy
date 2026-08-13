@@ -392,13 +392,26 @@ func VulnIDsWithSeverity(vulns []Vuln) []string {
 	return ids
 }
 
+// VulnIDsForDisplay returns the vuln IDs rendered for human-facing messages.
+// When minSeverity is set (a threshold is active) the severity band is appended
+// as "ID[band]" via VulnIDsWithSeverity; when minSeverity is empty (unset/none)
+// bare IDs are returned via VulnIDs, byte-for-byte identical to the
+// pre-min_severity behavior.
+func VulnIDsForDisplay(vulns []Vuln, minSeverity string) []string {
+	if minSeverity == "" {
+		return VulnIDs(vulns)
+	}
+	return VulnIDsWithSeverity(vulns)
+}
+
 // BuildDenyMessage formats the deny-mode error text:
 // "<name>@<version> has known vulnerabilities: <ids>", plus the first vuln's
-// summary in parentheses when present. IDs render as "ID[band]" when the vuln
-// has a known severity band. The caller prefixes its own middleware name (e.g.
-// "cve-check: " or "cve-check-retrieval: ").
-func BuildDenyMessage(name, version string, vulns []Vuln) string {
-	msg := fmt.Sprintf("%s@%s has known vulnerabilities: %s", name, version, strings.Join(VulnIDsWithSeverity(vulns), ","))
+// summary in parentheses when present. IDs render as "ID[band]" when a
+// min_severity threshold is active (minSeverity != ""); otherwise bare IDs are
+// rendered, matching the pre-min_severity behavior. The caller prefixes its
+// own middleware name (e.g. "cve-check: " or "cve-check-retrieval: ").
+func BuildDenyMessage(name, version string, vulns []Vuln, minSeverity string) string {
+	msg := fmt.Sprintf("%s@%s has known vulnerabilities: %s", name, version, strings.Join(VulnIDsForDisplay(vulns, minSeverity), ","))
 	if len(vulns) > 0 && vulns[0].Summary != "" {
 		msg += " (" + vulns[0].Summary + ")"
 	}

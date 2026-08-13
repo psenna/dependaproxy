@@ -72,7 +72,7 @@ func (m *Middleware) Fetch(ctx *pipeline.PipelineContext) (bool, error) {
 
 // apply enforces the configured mode on a confirmed OSV match.
 func (m *Middleware) apply(ctx *pipeline.PipelineContext, vulns []cveosv.Vuln) (bool, error) {
-	ids := cveosv.VulnIDsWithSeverity(vulns)
+	ids := cveosv.VulnIDsForDisplay(vulns, m.client.MinSeverity())
 	switch m.mode {
 	case cveosv.ModeWarn:
 		if ctx.Log != nil {
@@ -81,7 +81,7 @@ func (m *Middleware) apply(ctx *pipeline.PipelineContext, vulns []cveosv.Vuln) (
 		ctx.Metadata["cve-retrieval"] = ids
 		return true, nil
 	default: // deny
-		return false, fmt.Errorf("%s: %w", cveosv.BuildDenyMessage(ctx.PkgName, ctx.Version, vulns), pipeline.ErrRejected)
+		return false, fmt.Errorf("%s: %w", cveosv.BuildDenyMessage(ctx.PkgName, ctx.Version, vulns, m.client.MinSeverity()), pipeline.ErrRejected)
 	}
 }
 

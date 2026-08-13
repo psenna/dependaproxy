@@ -405,10 +405,10 @@ func TestCacheTTLExpiryViaInjectedNow(t *testing.T) {
 
 func TestBuildDenyMessageAndVulnIDs(t *testing.T) {
 	vulns := []Vuln{{ID: "CVE-2021-1234", Summary: "test summary"}, {ID: "GHSA-abc"}}
-	if got := BuildDenyMessage("lodash", "4.17.20", vulns); got != "lodash@4.17.20 has known vulnerabilities: CVE-2021-1234,GHSA-abc (test summary)" {
+	if got := BuildDenyMessage("lodash", "4.17.20", vulns, ""); got != "lodash@4.17.20 has known vulnerabilities: CVE-2021-1234,GHSA-abc (test summary)" {
 		t.Fatalf("deny message = %q", got)
 	}
-	if got := BuildDenyMessage("lodash", "4.17.20", nil); got != "lodash@4.17.20 has known vulnerabilities: " {
+	if got := BuildDenyMessage("lodash", "4.17.20", nil, ""); got != "lodash@4.17.20 has known vulnerabilities: " {
 		t.Fatalf("deny message (empty) = %q", got)
 	}
 	ids := VulnIDs(vulns)
@@ -423,8 +423,14 @@ func TestBuildDenyMessageWithSeverity(t *testing.T) {
 		{ID: "GHSA-abc", Severity: SeverityUnknown},
 		{ID: "CVE-2022-5678", Severity: SeverityMedium},
 	}
-	if got := BuildDenyMessage("lodash", "4.17.20", vulns); got != "lodash@4.17.20 has known vulnerabilities: CVE-2021-1234[critical],GHSA-abc,CVE-2022-5678[medium] (test summary)" {
+	// With a threshold active, bands are rendered.
+	if got := BuildDenyMessage("lodash", "4.17.20", vulns, "high"); got != "lodash@4.17.20 has known vulnerabilities: CVE-2021-1234[critical],GHSA-abc,CVE-2022-5678[medium] (test summary)" {
 		t.Fatalf("deny message = %q", got)
+	}
+	// With no threshold (unset), bare IDs are rendered byte-for-byte identical to
+	// the pre-min_severity behavior, even when Severity is populated.
+	if got := BuildDenyMessage("lodash", "4.17.20", vulns, ""); got != "lodash@4.17.20 has known vulnerabilities: CVE-2021-1234,GHSA-abc,CVE-2022-5678 (test summary)" {
+		t.Fatalf("unset threshold should render bare IDs, got %q", got)
 	}
 	ids := VulnIDsWithSeverity(vulns)
 	if len(ids) != 3 || ids[0] != "CVE-2021-1234[critical]" || ids[1] != "GHSA-abc" || ids[2] != "CVE-2022-5678[medium]" {

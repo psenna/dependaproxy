@@ -72,7 +72,7 @@ func (m *Middleware) apply(ctx *pipeline.PipelineContext, vulns []cveosv.Vuln) e
 	if len(vulns) == 0 {
 		return nil
 	}
-	ids := cveosv.VulnIDsWithSeverity(vulns)
+	ids := cveosv.VulnIDsForDisplay(vulns, m.client.MinSeverity())
 	switch m.mode {
 	case cveosv.ModeWarn:
 		if ctx.Log != nil {
@@ -82,7 +82,7 @@ func (m *Middleware) apply(ctx *pipeline.PipelineContext, vulns []cveosv.Vuln) e
 		ctx.Metadata["cve"] = ids
 		return nil
 	default: // deny
-		return fmt.Errorf("cve-check: %s", cveosv.BuildDenyMessage(ctx.PkgName, ctx.Version, vulns))
+		return fmt.Errorf("cve-check: %s", cveosv.BuildDenyMessage(ctx.PkgName, ctx.Version, vulns, m.client.MinSeverity()))
 	}
 }
 

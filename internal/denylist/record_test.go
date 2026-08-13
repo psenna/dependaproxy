@@ -230,7 +230,7 @@ func TestRecorderRecordsNonTransientCVEDenyVerdict(t *testing.T) {
 	vulns := []cveosv.Vuln{{ID: "CVE-2021-1234", Summary: "rce"}}
 	ve := &pipeline.ValidationError{
 		Middleware: "cve-check",
-		Err:        fmt.Errorf("cve-check: %s", cveosv.BuildDenyMessage(ctx.PkgName, ctx.Version, vulns)),
+		Err:        fmt.Errorf("cve-check: %s", cveosv.BuildDenyMessage(ctx.PkgName, ctx.Version, vulns, "")),
 	}
 	hook(ctx, ve)
 
