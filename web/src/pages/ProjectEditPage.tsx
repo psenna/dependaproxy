@@ -138,7 +138,7 @@ export default function ProjectEditPage({ knownRegistries = KNOWN_REGISTRIES }: 
               value={key}
               readOnly
               aria-label="Key"
-              className="w-full rounded border border-gray-300 bg-gray-100 px-2 py-1 text-sm"
+              className="w-full dp-input bg-gray-100"
             />
           </div>
 
@@ -170,7 +170,7 @@ export default function ProjectEditPage({ knownRegistries = KNOWN_REGISTRIES }: 
           <button
             type="button"
             onClick={addRegistry}
-            className="rounded bg-blue-600 px-3 py-1.5 text-sm text-white hover:bg-blue-700"
+            className="dp-btn-primary"
           >
             Add registry
           </button>
@@ -179,11 +179,11 @@ export default function ProjectEditPage({ knownRegistries = KNOWN_REGISTRIES }: 
             <button
               type="submit"
               disabled={submitDisabled}
-              className="rounded bg-blue-600 px-3 py-1.5 text-sm text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+              className="dp-btn-primary disabled:cursor-not-allowed disabled:opacity-50"
             >
               {submitting ? 'Saving…' : 'Save project'}
             </button>
-            <Link to={`/projects/${encodeURIComponent(key)}`} className="text-sm text-gray-600 hover:underline">
+            <Link to={`/projects/${encodeURIComponent(key)}`} className="dp-btn-ghost text-sm text-gray-600">
               Cancel
             </Link>
           </div>

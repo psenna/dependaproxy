@@ -139,7 +139,7 @@ export default function ProjectDetailPage({ debounceMs = 400 }: { debounceMs?: n
             >
               <div
                 data-testid="project-detail"
-                className="rounded border border-gray-200 bg-white p-4"
+                className="dp-card"
               >
                 <p>
                   <span className="font-medium">Key:</span> {project.data.key}
@@ -169,7 +169,7 @@ export default function ProjectDetailPage({ debounceMs = 400 }: { debounceMs?: n
                   value={registryInput}
                   onChange={(e) => setRegistryInput(e.target.value)}
                   placeholder="Filter by registry"
-                  className="w-48 rounded border border-gray-300 px-2 py-1 text-sm"
+                  className="w-48 dp-input"
                 />
                 <input
                   type="text"
@@ -178,7 +178,7 @@ export default function ProjectDetailPage({ debounceMs = 400 }: { debounceMs?: n
                   value={pkgInput}
                   onChange={(e) => setPkgInput(e.target.value)}
                   placeholder="Filter by package"
-                  className="w-48 rounded border border-gray-300 px-2 py-1 text-sm"
+                  className="w-48 dp-input"
                 />
               </div>
 
@@ -207,7 +207,7 @@ export default function ProjectDetailPage({ debounceMs = 400 }: { debounceMs?: n
                     className="w-full border-collapse text-left text-sm"
                   >
                     <thead>
-                      <tr className="border-b text-gray-500">
+                      <tr className="border-b border-gray-200 text-gray-500">
                         <th scope="col" className="py-2 pr-4 font-medium">
                           registry
                         </th>
@@ -239,7 +239,7 @@ export default function ProjectDetailPage({ debounceMs = 400 }: { debounceMs?: n
                         <tr
                           key={`${dep.registry}-${dep.pkg}-${dep.version}`}
                           data-testid={`dependency-row-${i}`}
-                          className="border-b"
+                          className="border-b border-gray-200"
                         >
                           <td className="py-2 pr-4">{dep.registry}</td>
                           <td className="py-2 pr-4">{dep.pkg}</td>
@@ -253,7 +253,7 @@ export default function ProjectDetailPage({ debounceMs = 400 }: { debounceMs?: n
                               data-testid={`sha256-copy-${i}`}
                               aria-label="Copy sha256"
                               onClick={() => copySha256(dep.sha256)}
-                              className="ml-2 text-blue-600 hover:underline"
+                              className="ml-2 dp-btn-ghost text-blue-600"
                             >
                               {copiedSha === dep.sha256 ? 'Copied' : 'Copy'}
                             </button>

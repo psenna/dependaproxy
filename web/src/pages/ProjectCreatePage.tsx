@@ -101,7 +101,7 @@ export default function ProjectCreatePage({ knownRegistries = KNOWN_REGISTRIES }
             type="text"
             value={key}
             onChange={(e) => setKey(e.target.value)}
-            className="w-full rounded border border-gray-300 px-2 py-1 text-sm"
+            className="w-full dp-input"
           />
           {key !== '' && !keyValid && (
             <p data-testid="key-error" className="mt-1 text-xs text-red-600">
@@ -137,7 +137,7 @@ export default function ProjectCreatePage({ knownRegistries = KNOWN_REGISTRIES }
         <button
           type="button"
           onClick={addRegistry}
-          className="rounded bg-blue-600 px-3 py-1.5 text-sm text-white hover:bg-blue-700"
+          className="dp-btn-primary"
         >
           Add registry
         </button>
@@ -146,11 +146,11 @@ export default function ProjectCreatePage({ knownRegistries = KNOWN_REGISTRIES }
           <button
             type="submit"
             disabled={submitDisabled}
-            className="rounded bg-blue-600 px-3 py-1.5 text-sm text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+            className="dp-btn-primary disabled:cursor-not-allowed disabled:opacity-50"
           >
             {submitting ? 'Creating…' : 'Create project'}
           </button>
-          <Link to="/projects" className="text-sm text-gray-600 hover:underline">
+          <Link to="/projects" className="dp-btn-ghost text-sm text-gray-600">
             Cancel
           </Link>
         </div>
