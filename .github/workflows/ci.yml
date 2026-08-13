@@ -122,6 +122,8 @@ jobs:
       - run: npm ci
       - run: npm run lint
       - run: npm run build
+      - name: assert web/dist exists
+        run: test -f dist/index.html && test -d dist/assets
       - run: npm test
       - run: npx playwright install --with-deps chromium
       - run: npm run e2e
@@ -131,3 +133,15 @@ jobs:
           name: playwright-report
           path: web/playwright-report
           retention-days: 7
+
+  docker-build:
+    name: docker build (web-build stage + Go embed)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: docker build
+        run: docker build -t dependaproxy:ci .
+      - name: assert web-build stage produced dist
+        run: |
+          docker build --target web-build -t dp-web:ci .
+          docker run --rm dp-web:ci sh -c 'test -f /src/web/dist/index.html'

@@ -4,3 +4,11 @@
 cover.out
 cover.html
 *.test
+# web/ build outputs — the Dockerfile builds these in the web-build stage; a
+# stale local dist/node_modules must not leak into the image.
+web/node_modules
+web/dist
+web/playwright-report
+web/test-results
+web/coverage
+web/*.tsbuildinfo
