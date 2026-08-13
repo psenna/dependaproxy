@@ -57,7 +57,7 @@ GOLANGCI_LINT_VERSION := v2.12.2
 GOVULNCHECK_VERSION   := latest
 
 .PHONY: all test vet fmt-check lint vuln tidy run db stop-db minio stop-minio clean \
-	web-install web-build web-unit web-test web-lint web-format web-e2e build-image
+	web-install web-build web-sync web-unit web-test web-lint web-format web-e2e build-image
 
 all: vet fmt-check test
 
@@ -90,7 +90,7 @@ vuln:
 		test -x $$GOBIN/govulncheck || go install golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION); \
 		govulncheck ./...'
 
-run:
+run: web-sync
 	$(DOCKER_RUN) go run ./cmd/dependaproxy
 
 # Stand up a PostgreSQL 18 service for local dev/tests.
@@ -130,6 +130,19 @@ web-install:
 # Self-contained: installs deps then builds, so it works on a clean checkout.
 web-build:
 	$(DOCKER_RUN_WEB) sh -c 'npm ci && npm run build'
+
+# Copies the built web UI (web/dist) into internal/webui/dist so the Go binary
+# embeds it (issue #152). No-op when web/dist is absent (a fresh checkout that
+# has not run web-build yet) — the committed placeholder keeps the build
+# compiling. The real build overwrites the placeholder; restore it with
+# `git checkout internal/webui/dist/index.html`.
+web-sync:
+	@if [ -d web/dist ]; then \
+		rm -rf internal/webui/dist && mkdir -p internal/webui/dist && \
+		cp -r web/dist/. internal/webui/dist/; \
+	else \
+		echo "web/dist not found; keeping committed placeholder in internal/webui/dist"; \
+	fi
 
 web-unit:
 	$(DOCKER_RUN_WEB) npm test

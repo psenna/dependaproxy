@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/psenna/dependaproxy/internal/adapter"
@@ -127,5 +128,50 @@ func TestServerAdminRequiresAdminToken(t *testing.T) {
 	}
 	if rr := do(h, "/t/foo", "Bearer admintok"); rr.Code != 401 {
 		t.Errorf("registry with admin token: code=%d want 401", rr.Code)
+	}
+}
+
+// TestServerWebUIMounted verifies the embedded web UI is mounted at "/" and is
+// public, while /healthz stays open, /admin stays admin-token-gated, and
+// adapter prefixes stay package-token-protected (ServeMux precedence: the
+// most specific pattern wins, so "/" only sees non-registry paths).
+func TestServerWebUIMounted(t *testing.T) {
+	h := newDispatchServerWithAdmin(t, "tok", "admintok").Handler()
+
+	// Public SPA at /.
+	rr := do(h, "/", "")
+	if rr.Code != 200 {
+		t.Errorf("GET /: code=%d want 200", rr.Code)
+	}
+	if ct := rr.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/html") {
+		t.Errorf("GET /: Content-Type=%q want text/html", ct)
+	}
+	if !strings.Contains(rr.Body.String(), "<html") {
+		t.Errorf("GET /: body missing <html: %q", rr.Body.String())
+	}
+
+	// /healthz stays open.
+	if rr := do(h, "/healthz", ""); rr.Code != 200 || rr.Body.String() != "ok" {
+		t.Errorf("GET /healthz: code=%d body=%q want 200 ok", rr.Code, rr.Body.String())
+	}
+
+	// /admin requires the admin token (exempt from the package token, gated by
+	// AdminTokenAuth).
+	if rr := do(h, "/admin/projects", ""); rr.Code != 401 {
+		t.Errorf("GET /admin/projects no auth: code=%d want 401", rr.Code)
+	}
+
+	// SPA fallback for client-side routes.
+	rr = do(h, "/projects/acme/edit", "")
+	if rr.Code != 200 {
+		t.Errorf("GET /projects/acme/edit: code=%d want 200", rr.Code)
+	}
+	if !strings.Contains(rr.Body.String(), "<html") {
+		t.Errorf("GET /projects/acme/edit: body missing <html: %q", rr.Body.String())
+	}
+
+	// Adapter routes stay package-token-protected.
+	if rr := do(h, "/t/foo", ""); rr.Code != 401 {
+		t.Errorf("GET /t/foo no auth: code=%d want 401", rr.Code)
 	}
 }

@@ -17,6 +17,7 @@ import (
 	"github.com/psenna/dependaproxy/internal/config"
 	"github.com/psenna/dependaproxy/internal/log"
 	"github.com/psenna/dependaproxy/internal/project"
+	"github.com/psenna/dependaproxy/internal/webui"
 )
 
 // Server is the aggregate HTTP server for all configured registries.
@@ -96,10 +97,26 @@ func (s *Server) Handler() http.Handler {
 		prefix := strings.TrimRight(a.Prefix(), "/")
 		mux.Handle(prefix+"/", http.StripPrefix(prefix, a.Handler()))
 	}
-	// /admin/ is exempt from the package token so it is gated ONLY by the admin
-	// token (the exempt predicate runs on r.URL.Path before StripPrefix, so it
-	// sees /admin/projects).
-	exempt := func(p string) bool { return p == "/healthz" || strings.HasPrefix(p, "/admin/") }
+	// The web UI is mounted at "/" and is public. ServeMux routes each request
+	// to the most specific pattern, so adapter prefixes (/t/) and /admin/ win
+	// over "/" and the webui only sees non-registry paths. The exempt predicate
+	// mirrors that precedence: /healthz and /admin/ are exempt from the package
+	// token (the latter is gated ONLY by AdminTokenAuth; the predicate runs on
+	// r.URL.Path before StripPrefix, so it sees /admin/projects), adapter
+	// prefixes are NOT exempt (they require the package token), and everything
+	// else is the public SPA.
+	mux.Handle("/", webui.Handler())
+	exempt := func(p string) bool {
+		if p == "/healthz" || strings.HasPrefix(p, "/admin/") {
+			return true
+		}
+		for _, a := range s.adapters {
+			if strings.HasPrefix(p, strings.TrimRight(a.Prefix(), "/")+"/") {
+				return false
+			}
+		}
+		return true
+	}
 	return TokenAuth(s.cfg.Auth.Token, exempt, s.logger, mux)
 }
 
