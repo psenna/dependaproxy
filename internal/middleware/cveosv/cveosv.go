@@ -21,12 +21,13 @@ import (
 
 // Defaults used when the corresponding param is omitted.
 const (
-	DefaultEndpoint = "https://api.osv.dev"
-	DefaultMode     = ModeDeny
-	DefaultOnError  = OnErrorFailOpen
-	DefaultTimeout  = 10 * time.Second
-	DefaultCacheTTL = time.Hour
-	DefaultCacheMax = 4096
+	DefaultEndpoint      = "https://api.osv.dev"
+	DefaultMode          = ModeDeny
+	DefaultOnError       = OnErrorFailOpen
+	DefaultTimeout       = 10 * time.Second
+	DefaultCacheTTL      = time.Hour
+	DefaultCacheMax      = 4096
+	DefaultCacheDuration = 7 * 24 * time.Hour // persistent cve-check-retrieval cache freshness window
 )
 
 // Modes and error policies.
@@ -104,6 +105,17 @@ func DefaultedOnError(o string) string {
 	return o
 }
 
+// DefaultedCacheDuration returns d, or DefaultCacheDuration when d is
+// non-positive. It lets callers that share a pre-built Client apply the same
+// per-field defaulting for the persistent cve-check-retrieval cache without
+// re-deriving the whole client.
+func DefaultedCacheDuration(d time.Duration) time.Duration {
+	if d <= 0 {
+		return DefaultCacheDuration
+	}
+	return d
+}
+
 // Vuln is one vulnerability record in an OSV query response. Only the fields
 // surfaced in deny/warn messages are kept. Severity is the derived band
 // (critical/high/medium/low/unknown) and is never serialized back to OSV.
@@ -148,14 +160,18 @@ type QueryResponse struct {
 
 // Params is the shared yaml-decoded configuration for an OSV-backed middleware
 // (endpoint/mode/on_error/timeout/cache_ttl/min_severity). Both cve-check and
-// cve-check-retrieval decode their params into this type.
+// cve-check-retrieval decode their params into this type. cache_enabled and
+// cache_duration configure the persistent Postgres cache of the retrieval
+// cve-check-retrieval middleware (the validation cve-check ignores them).
 type Params struct {
-	Endpoint    string        `yaml:"endpoint"`
-	Mode        string        `yaml:"mode"`
-	OnError     string        `yaml:"on_error"`
-	Timeout     time.Duration `yaml:"timeout"`
-	CacheTTL    time.Duration `yaml:"cache_ttl"`
-	MinSeverity string        `yaml:"min_severity"`
+	Endpoint      string        `yaml:"endpoint"`
+	Mode          string        `yaml:"mode"`
+	OnError       string        `yaml:"on_error"`
+	Timeout       time.Duration `yaml:"timeout"`
+	CacheTTL      time.Duration `yaml:"cache_ttl"`
+	MinSeverity   string        `yaml:"min_severity"`
+	CacheEnabled  bool          `yaml:"cache_enabled"`
+	CacheDuration time.Duration `yaml:"cache_duration"`
 }
 
 // Ecosystem maps a pipeline registry name to an OSV ecosystem. Only registries
@@ -416,6 +432,99 @@ func BuildDenyMessage(name, version string, vulns []Vuln, minSeverity string) st
 		msg += " (" + vulns[0].Summary + ")"
 	}
 	return msg
+}
+
+// Counts is the per-severity-band vuln count for one package version, used by
+// the persistent cve-check-retrieval cache. Counts are derived from the
+// min_severity-filtered vuln list the shared client returns, so a row's counts
+// reflect exactly what the middleware would act on at store time.
+type Counts struct {
+	Critical int
+	High     int
+	Medium   int
+	Low      int
+	Unknown  int
+}
+
+// CountBySeverity tallies vulns into severity bands. Vulns with an empty or
+// unrecognized severity band count as unknown.
+func CountBySeverity(vulns []Vuln) Counts {
+	var c Counts
+	for _, v := range vulns {
+		switch v.Severity {
+		case SeverityCritical:
+			c.Critical++
+		case SeverityHigh:
+			c.High++
+		case SeverityMedium:
+			c.Medium++
+		case SeverityLow:
+			c.Low++
+		default:
+			c.Unknown++
+		}
+	}
+	return c
+}
+
+// Total returns the sum of every band.
+func (c Counts) Total() int {
+	return c.Critical + c.High + c.Medium + c.Low + c.Unknown
+}
+
+// FilterByMinSeverity zeroes the bands below the min_severity threshold.
+// Unknown is always dropped when a threshold is set (it ranks below low). An
+// empty threshold (or "none", which normalizes to "") keeps every band.
+func (c Counts) FilterByMinSeverity(minSeverity string) Counts {
+	threshold := SeverityRank(minSeverity)
+	if threshold <= 0 {
+		return c
+	}
+	out := Counts{}
+	if SeverityRank(SeverityCritical) >= threshold {
+		out.Critical = c.Critical
+	}
+	if SeverityRank(SeverityHigh) >= threshold {
+		out.High = c.High
+	}
+	if SeverityRank(SeverityMedium) >= threshold {
+		out.Medium = c.Medium
+	}
+	if SeverityRank(SeverityLow) >= threshold {
+		out.Low = c.Low
+	}
+	return out
+}
+
+// BuildDenyMessageFromCounts formats the counts-based deny/warn text used by the
+// persistent cve-check-retrieval cache: "<name>@<version> has <count> <band>[,
+// <count> <band>...] CVE(s) (cached)". Only non-zero bands are listed and the
+// noun pluralizes (CVE for a total of 1, CVEs otherwise). minSeverity is
+// accepted for signature symmetry with BuildDenyMessage; the counts passed in
+// are already filtered, so the message lists exactly the bands the caller would
+// act on.
+func BuildDenyMessageFromCounts(name, version string, c Counts, minSeverity string) string {
+	parts := make([]string, 0, 5)
+	if c.Critical > 0 {
+		parts = append(parts, fmt.Sprintf("%d critical", c.Critical))
+	}
+	if c.High > 0 {
+		parts = append(parts, fmt.Sprintf("%d high", c.High))
+	}
+	if c.Medium > 0 {
+		parts = append(parts, fmt.Sprintf("%d medium", c.Medium))
+	}
+	if c.Low > 0 {
+		parts = append(parts, fmt.Sprintf("%d low", c.Low))
+	}
+	if c.Unknown > 0 {
+		parts = append(parts, fmt.Sprintf("%d unknown", c.Unknown))
+	}
+	noun := "CVE"
+	if c.Total() != 1 {
+		noun = "CVEs"
+	}
+	return fmt.Sprintf("%s@%s has %s %s (cached)", name, version, strings.Join(parts, ", "), noun)
 }
 
 // filterBySeverity drops vulns below the min_severity threshold. An empty

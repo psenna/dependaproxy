@@ -202,12 +202,20 @@ registries:
   ecosystem/name/version — a bounded TTL cache shared with the validation
   `cve-check` via the same `internal/middleware/cveosv` client logic),
   `min_severity` (only act on advisories at/above this band —
-  `critical|high|medium|low`; default unset = all, `none` = unset).
+  `critical|high|medium|low`; default unset = all, `none` = unset),
+  `cache_enabled` (persist OSV results as severity-band counts in Postgres so a
+  proxy restart does not re-query OSV for every package on the next serve;
+  default `false`), `cache_duration` (how long a cached result is considered
+  fresh; default `168h` = 7 days). The cache table follows the
+  `middleware_<chain>_<middleware>_<purpose>` naming convention — see
+  [docs/middleware-tables.md](docs/middleware-tables.md).
   When both the validation `cve-check` and `cve-check-retrieval` are configured,
   they share one OSV client and its bounded TTL cache per adapter, so the first
   untrusted fetch makes **one** OSV call (the retrieval stage populates the
   cache the validation stage reads); subsequent serves make **zero** calls while
-  the TTL cache is warm. In v1 the middleware only denies or warns — eviction
+  the TTL cache is warm. With `cache_enabled`, a fresh Postgres entry is served
+  from counts (deny/warn) without an OSV round-trip, so the zero-call window
+  survives a proxy restart. In v1 the middleware only denies or warns — eviction
   of the stored (already-trusted) record on a new advisory is deferred.
 
 ### Cache backends (retrieval)

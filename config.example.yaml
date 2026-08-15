@@ -105,6 +105,13 @@ registries:
           on_error: fail_open
           cache_ttl: 1h
           # min_severity: high
+          # Persistent Postgres cache of OSV results (severity-band counts), so
+          # a proxy restart does not re-query OSV for every package on the next
+          # serve. cache_enabled: false (default) | true.
+          # cache_duration: how long a cached result is considered fresh
+          # (default 168h = 7 days).
+          # cache_enabled: true
+          # cache_duration: 168h
       - type: local-disk-cache
         params:
           path: /var/lib/dependaproxy/cache/npm
@@ -177,6 +184,13 @@ registries:
           on_error: fail_open
           cache_ttl: 1h
           # min_severity: high
+          # Persistent Postgres cache of OSV results (severity-band counts), so
+          # a proxy restart does not re-query OSV for every package on the next
+          # serve. cache_enabled: false (default) | true.
+          # cache_duration: how long a cached result is considered fresh
+          # (default 168h = 7 days).
+          # cache_enabled: true
+          # cache_duration: 168h
       - type: local-disk-cache
         params:
           path: /var/lib/dependaproxy/cache/pypi
@@ -219,6 +233,16 @@ registries:
     # artifacts are served from disk on subsequent requests; the cache implements
     # pipeline.Evictor so a sha256 mismatch (trust flow) evicts the entry.
     retrieval:
+      # cve-check-retrieval MUST be FIRST in the retrieval list (outermost) so
+      # it runs on EVERY serve. Persistent Postgres cache params:
+      # cache_enabled: false (default) | true; cache_duration: default 168h.
+      # - type: cve-check-retrieval
+      #   params:
+      #     mode: deny
+      #     on_error: fail_open
+      #     cache_ttl: 1h
+      #     cache_enabled: true
+      #     cache_duration: 168h
       - type: local-disk-cache
         params:
           path: /var/lib/dependaproxy/cache/goproxy

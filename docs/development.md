@@ -58,6 +58,13 @@ container. The `release.yml` workflow builds the Docker image and publishes it t
 GHCR (`ghcr.io/psenna/dependaproxy:<release-tag>`) on every GitHub Release cut
 from `main`.
 
+## Middleware DB tables
+
+Middleware that persists state to Postgres names its tables
+`middleware_<chain>_<middleware>_<purpose>` and applies its embedded
+`schema.sql` via `db.ApplySchema` at adapter startup. See
+[middleware-tables](middleware-tables) for the convention and the table list.
+
 ## Extending
 
 - **New registry** = one package under `internal/registry/<x>` + one

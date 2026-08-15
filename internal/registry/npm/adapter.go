@@ -9,6 +9,7 @@ import (
 	"github.com/psenna/dependaproxy/internal/middleware/cveosv"
 	"github.com/psenna/dependaproxy/internal/middleware/mutation"
 	"github.com/psenna/dependaproxy/internal/middleware/mutation/stripscripts"
+	"github.com/psenna/dependaproxy/internal/middleware/retrieval/cvecheckcache"
 	"github.com/psenna/dependaproxy/internal/middleware/retrieval/cverecheck"
 	"github.com/psenna/dependaproxy/internal/middleware/retrieval/localcache"
 	"github.com/psenna/dependaproxy/internal/middleware/retrieval/s3cache"
@@ -40,7 +41,21 @@ func Factory(ctx context.Context, cfg config.RegistryConfig, deps adapter.Deps) 
 	// One OSV client (and its cache) shared by the validation cve-check and the
 	// retrieval cve-check-retrieval middlewares, so an untrusted request that
 	// runs both stages queries OSV once per (ecosystem,name,version).
-	sharedCVE := cveosv.NewClient(adapter.CVESharedParams(cfg), nil, deps.Now)
+	pr := adapter.CVESharedParams(cfg)
+	sharedCVE := cveosv.NewClient(pr, nil, deps.Now)
+
+	// Optional persistent Postgres cache of cve-check-retrieval results
+	// (severity-band counts), so a proxy restart does not re-query OSV for every
+	// package on the next serve. Enabled via cache_enabled in the
+	// cve-check-retrieval params; cache_duration defaults to 7 days.
+	var cveStore cvecheckcache.Store
+	if pr.CacheEnabled {
+		cveStore, err = cvecheckcache.OpenStore(ctx, deps.DB)
+		if err != nil {
+			return nil, err
+		}
+	}
+	cacheDuration := cveosv.DefaultedCacheDuration(pr.CacheDuration)
 
 	reg := pipeline.NewRegistry()
 	reg.RegisterValidation("deny-list-check", denylist.Factory(denyStore))
@@ -49,7 +64,7 @@ func Factory(ctx context.Context, cfg config.RegistryConfig, deps adapter.Deps) 
 	reg.RegisterValidation("malware-scan", malware.Factory)
 	reg.RegisterValidation("guarddog-scan", guarddog.Factory(nil))
 	reg.RegisterValidation("provenance-verify", provenance.Factory(NewProvenanceSource(client)))
-	reg.RegisterRetrieval("cve-check-retrieval", cverecheck.FactoryWithClient(sharedCVE))
+	reg.RegisterRetrieval("cve-check-retrieval", cverecheck.FactoryWithClientAndCache(sharedCVE, cveStore, cacheDuration, deps.Now))
 	reg.RegisterRetrieval("local-disk-cache", localcache.Factory)
 	reg.RegisterRetrieval("s3-cache", s3cache.Factory)
 	reg.RegisterRetrieval("upstream-registry", UpstreamFactory(client))
