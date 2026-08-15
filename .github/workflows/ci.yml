@@ -147,5 +147,7 @@ jobs:
         run: docker buildx build --platform linux/amd64,linux/arm64 -t dependaproxy:ci .
       - name: assert web-build stage produced dist
         run: |
-          docker buildx build --platform linux/amd64 --target web-build -t dp-web:ci .
+          # --load: with the docker-container driver, buildx doesn't put the
+          # image in the local daemon unless --load is given; docker run needs it.
+          docker buildx build --platform linux/amd64 --target web-build -t dp-web:ci --load .
           docker run --rm --platform linux/amd64 dp-web:ci sh -c 'test -f /src/web/dist/index.html'
