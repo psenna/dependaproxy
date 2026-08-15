@@ -58,21 +58,35 @@ func Register(typeName string, f Factory) {
 
 // CVESharedParams scans cfg for the first cve-check (validation) or
 // cve-check-retrieval (retrieval) middleware params and returns them for
-// building a shared cveosv.Client. Validation wins; mode/on_error are left
-// for the per-middleware factories to apply. Returns zero Params (all
-// defaults) if neither is configured.
+// building a shared cveosv.Client. Validation wins for the shared client
+// fields (endpoint/mode/on_error/timeout/cache_ttl/min_severity); mode/on_error
+// are left for the per-middleware factories to apply. CacheEnabled and
+// CacheDuration are ALWAYS sourced from the retrieval cve-check-retrieval block
+// (merged over the validation winner), so the persistent cve-check-retrieval
+// cache can be enabled independently of which block wins the shared client
+// fields. Returns zero Params (all defaults) if neither is configured.
 func CVESharedParams(cfg config.RegistryConfig) cveosv.Params {
+	var pr cveosv.Params
+	found := false
 	for _, m := range cfg.Validation {
 		if m.Type == "cve-check" {
-			return decodeCVEParams(m.Params)
+			pr = decodeCVEParams(m.Params)
+			found = true
+			break
 		}
 	}
 	for _, m := range cfg.Retrieval {
 		if m.Type == "cve-check-retrieval" {
-			return decodeCVEParams(m.Params)
+			rp := decodeCVEParams(m.Params)
+			if !found {
+				pr = rp
+			}
+			pr.CacheEnabled = rp.CacheEnabled
+			pr.CacheDuration = rp.CacheDuration
+			break
 		}
 	}
-	return cveosv.Params{}
+	return pr
 }
 
 // decodeCVEParams decodes a middleware params node into cveosv.Params. A zero

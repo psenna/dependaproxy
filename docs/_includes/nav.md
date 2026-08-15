@@ -1,1 +1,1 @@
-[Home](./) · [Getting Started](getting-started) · [Examples](examples) · [Configuration](configuration) · [Dashboard](dashboard) · [Development](development)
+[Home](./) · [Getting Started](getting-started) · [Examples](examples) · [Configuration](configuration) · [Dashboard](dashboard) · [Development](development) · [Middleware DB tables](middleware-tables)

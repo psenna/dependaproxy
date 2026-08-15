@@ -417,6 +417,52 @@ func TestBuildDenyMessageAndVulnIDs(t *testing.T) {
 	}
 }
 
+func TestCountsFilterByMinSeverity(t *testing.T) {
+	c := Counts{Critical: 1, High: 2, Medium: 3, Low: 4, Unknown: 5}
+	// Unset threshold keeps every band.
+	if got := c.FilterByMinSeverity(""); got != c {
+		t.Fatalf("unset threshold should keep all bands, got %+v", got)
+	}
+	// "none" normalizes to unset → keeps every band.
+	if got := c.FilterByMinSeverity(SeverityNone); got != c {
+		t.Fatalf("none threshold should keep all bands, got %+v", got)
+	}
+	// high threshold keeps critical + high, drops medium/low/unknown.
+	got := c.FilterByMinSeverity(SeverityHigh)
+	if got.Critical != 1 || got.High != 2 || got.Medium != 0 || got.Low != 0 || got.Unknown != 0 {
+		t.Fatalf("high threshold = %+v", got)
+	}
+	// critical threshold keeps only critical.
+	got = c.FilterByMinSeverity(SeverityCritical)
+	if got.Critical != 1 || got.High != 0 || got.Medium != 0 || got.Low != 0 || got.Unknown != 0 {
+		t.Fatalf("critical threshold = %+v", got)
+	}
+	// low threshold keeps everything except unknown.
+	got = c.FilterByMinSeverity(SeverityLow)
+	if got.Critical != 1 || got.High != 2 || got.Medium != 3 || got.Low != 4 || got.Unknown != 0 {
+		t.Fatalf("low threshold = %+v", got)
+	}
+	// An unrecognized threshold behaves like unset.
+	if got := c.FilterByMinSeverity("bogus"); got != c {
+		t.Fatalf("bogus threshold should keep all bands, got %+v", got)
+	}
+}
+
+func TestBuildDenyMessageFromCounts(t *testing.T) {
+	if got := BuildDenyMessageFromCounts("lodash", "4.17.20", Counts{Critical: 2, High: 1}, ""); got != "lodash@4.17.20 has 2 critical, 1 high CVEs (cached)" {
+		t.Fatalf("message = %q", got)
+	}
+	if got := BuildDenyMessageFromCounts("lodash", "4.17.20", Counts{Critical: 1}, ""); got != "lodash@4.17.20 has 1 critical CVE (cached)" {
+		t.Fatalf("message = %q", got)
+	}
+	if got := BuildDenyMessageFromCounts("lodash", "4.17.20", Counts{Unknown: 3}, ""); got != "lodash@4.17.20 has 3 unknown CVEs (cached)" {
+		t.Fatalf("message = %q", got)
+	}
+	if got := BuildDenyMessageFromCounts("lodash", "4.17.20", Counts{Medium: 1, Low: 2}, "high"); got != "lodash@4.17.20 has 1 medium, 2 low CVEs (cached)" {
+		t.Fatalf("message = %q", got)
+	}
+}
+
 func TestBuildDenyMessageWithSeverity(t *testing.T) {
 	vulns := []Vuln{
 		{ID: "CVE-2021-1234", Summary: "test summary", Severity: SeverityCritical},

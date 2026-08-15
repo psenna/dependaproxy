@@ -8,11 +8,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/psenna/dependaproxy/internal/middleware/cveosv"
+	"github.com/psenna/dependaproxy/internal/middleware/retrieval/cvecheckcache"
 	"github.com/psenna/dependaproxy/internal/middleware/retrieval/localcache"
 	"github.com/psenna/dependaproxy/internal/pipeline"
 	"gopkg.in/yaml.v3"
@@ -468,5 +470,317 @@ func TestUnsetThresholdBareIDs(t *testing.T) {
 	got, ok := ctx.Metadata["cve-retrieval"].([]string)
 	if !ok || len(got) != 1 || got[0] != "CVE-2026-9999" {
 		t.Fatalf("unset threshold should record bare ID in metadata, got %#v", ctx.Metadata["cve-retrieval"])
+	}
+}
+
+// fakeStore is an in-memory cvecheckcache.Store for tests. err/putErr inject
+// read/write failures.
+type fakeStore struct {
+	mu     sync.Mutex
+	items  map[string]*cvecheckcache.Entry
+	err    error
+	putErr error
+}
+
+func newFakeStore() *fakeStore {
+	return &fakeStore{items: map[string]*cvecheckcache.Entry{}}
+}
+
+func (s *fakeStore) Get(_ context.Context, ecosystem, name, version string) (*cvecheckcache.Entry, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.err != nil {
+		return nil, s.err
+	}
+	e, ok := s.items[cveosv.Key(ecosystem, name, version)]
+	if !ok {
+		return nil, nil
+	}
+	cp := *e
+	return &cp, nil
+}
+
+func (s *fakeStore) Put(_ context.Context, ecosystem, name, version string, counts cvecheckcache.Counts, retrievedAt time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.putErr != nil {
+		return s.putErr
+	}
+	s.items[cveosv.Key(ecosystem, name, version)] = &cvecheckcache.Entry{
+		Ecosystem: ecosystem, Name: name, Version: version, Counts: counts, RetrievedAt: retrievedAt,
+	}
+	return nil
+}
+
+// newCachedMiddleware builds a deny-mode Middleware with the persistent cache
+// wired to store and a fixed clock.
+func newCachedMiddleware(endpoint string, store cvecheckcache.Store, cacheDuration time.Duration, now time.Time) *Middleware {
+	shared := cveosv.NewClient(cveosv.Params{Endpoint: endpoint, CacheTTL: time.Hour}, nil, func() time.Time { return now })
+	return &Middleware{
+		client:        shared,
+		mode:          cveosv.ModeDeny,
+		onError:       cveosv.OnErrorFailOpen,
+		cache:         store,
+		cacheDuration: cacheDuration,
+		now:           func() time.Time { return now },
+		next:          &fakeNext{hit: true, data: []byte("BYTES")},
+	}
+}
+
+func TestCacheFreshHitSkipsOSV(t *testing.T) {
+	srv, hits := osvServer(t, []cveosv.Vuln{{ID: "CVE-2026-9999"}})
+	store := newFakeStore()
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	if err := store.Put(context.Background(), "npm", "lodash", "4.17.20", cvecheckcache.Counts{Critical: 1}, now); err != nil {
+		t.Fatal(err)
+	}
+	m := newCachedMiddleware(srv.URL, store, time.Hour, now)
+	hit, err := m.Fetch(testCtx("npm", "lodash", "4.17.20"))
+	if err == nil || hit {
+		t.Fatalf("fresh cached deny should reject, got hit=%v err=%v", hit, err)
+	}
+	if !errors.Is(err, pipeline.ErrRejected) {
+		t.Fatalf("err should wrap ErrRejected, got %v", err)
+	}
+	if hits.Load() != 0 {
+		t.Fatalf("fresh DB hit should not query OSV, got %d hits", hits.Load())
+	}
+}
+
+func TestCacheFreshHitWarnFromCounts(t *testing.T) {
+	srv, hits := osvServer(t, nil)
+	store := newFakeStore()
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	if err := store.Put(context.Background(), "npm", "lodash", "4.17.20", cvecheckcache.Counts{Critical: 1}, now); err != nil {
+		t.Fatal(err)
+	}
+	m := newCachedMiddleware(srv.URL, store, time.Hour, now)
+	m.mode = cveosv.ModeWarn
+	ctx := testCtx("npm", "lodash", "4.17.20")
+	hit, err := m.Fetch(ctx)
+	if err != nil || !hit {
+		t.Fatalf("warn should serve, got hit=%v err=%v", hit, err)
+	}
+	got, ok := ctx.Metadata["cve-retrieval"].([]string)
+	if !ok || len(got) != 1 || got[0] != "lodash@4.17.20 has 1 critical CVE (cached)" {
+		t.Fatalf("warn metadata = %#v", ctx.Metadata["cve-retrieval"])
+	}
+	if hits.Load() != 0 {
+		t.Fatalf("fresh DB hit should not query OSV, got %d hits", hits.Load())
+	}
+}
+
+func TestCacheFreshHitCleanServes(t *testing.T) {
+	srv, hits := osvServer(t, nil)
+	store := newFakeStore()
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	if err := store.Put(context.Background(), "npm", "lodash", "4.17.20", cvecheckcache.Counts{}, now); err != nil {
+		t.Fatal(err)
+	}
+	m := newCachedMiddleware(srv.URL, store, time.Hour, now)
+	ctx := testCtx("npm", "lodash", "4.17.20")
+	hit, err := m.Fetch(ctx)
+	if err != nil || !hit {
+		t.Fatalf("clean cached entry should serve, got hit=%v err=%v", hit, err)
+	}
+	if hits.Load() != 0 {
+		t.Fatalf("fresh DB hit should not query OSV, got %d hits", hits.Load())
+	}
+}
+
+func TestCacheStaleHitRefetchesAndUpserts(t *testing.T) {
+	srv, hits := osvServer(t, []cveosv.Vuln{{ID: "CVE-2026-9999"}})
+	store := newFakeStore()
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	// Stale: retrieved 2h ago, cacheDuration 1h.
+	if err := store.Put(context.Background(), "npm", "lodash", "4.17.20", cvecheckcache.Counts{Critical: 1}, now.Add(-2*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	m := newCachedMiddleware(srv.URL, store, time.Hour, now)
+	hit, err := m.Fetch(testCtx("npm", "lodash", "4.17.20"))
+	if err == nil || hit {
+		t.Fatalf("stale cached deny should reject, got hit=%v err=%v", hit, err)
+	}
+	if hits.Load() != 1 {
+		t.Fatalf("stale entry should re-query OSV, got %d hits", hits.Load())
+	}
+	entry, _ := store.Get(context.Background(), "npm", "lodash", "4.17.20")
+	if entry == nil || !entry.RetrievedAt.Equal(now) {
+		t.Fatalf("retrieved_at should be refreshed to now, got %+v", entry)
+	}
+}
+
+func TestCacheMissFetchesAndStores(t *testing.T) {
+	srv, hits := osvServer(t, []cveosv.Vuln{{ID: "CVE-2026-9999"}})
+	store := newFakeStore()
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	m := newCachedMiddleware(srv.URL, store, time.Hour, now)
+	hit, err := m.Fetch(testCtx("npm", "lodash", "4.17.20"))
+	if err == nil || hit {
+		t.Fatalf("deny should reject, got hit=%v err=%v", hit, err)
+	}
+	if hits.Load() != 1 {
+		t.Fatalf("cache miss should query OSV, got %d hits", hits.Load())
+	}
+	entry, _ := store.Get(context.Background(), "npm", "lodash", "4.17.20")
+	// The fake OSV server returns vulns with no severity, so the single vuln
+	// tallies as unknown.
+	if entry == nil || entry.Counts.Unknown != 1 || entry.Counts.Total() != 1 {
+		t.Fatalf("entry should be stored, got %+v", entry)
+	}
+}
+
+func TestCacheMissCleanStoresZero(t *testing.T) {
+	srv, hits := osvServer(t, nil)
+	store := newFakeStore()
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	m := newCachedMiddleware(srv.URL, store, time.Hour, now)
+	ctx := testCtx("npm", "lodash", "4.17.20")
+	hit, err := m.Fetch(ctx)
+	if err != nil || !hit {
+		t.Fatalf("clean should serve, got hit=%v err=%v", hit, err)
+	}
+	if hits.Load() != 1 {
+		t.Fatalf("cache miss should query OSV, got %d hits", hits.Load())
+	}
+	entry, _ := store.Get(context.Background(), "npm", "lodash", "4.17.20")
+	if entry == nil || entry.Counts.Total() != 0 {
+		t.Fatalf("clean entry should be stored with zero counts, got %+v", entry)
+	}
+}
+
+func TestCacheDenyAppliesMinSeverity(t *testing.T) {
+	srv, hits := osvServer(t, nil)
+	store := newFakeStore()
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	// Stored counts include a low band; the current threshold (high) drops it.
+	if err := store.Put(context.Background(), "npm", "lodash", "4.17.20", cvecheckcache.Counts{Low: 1}, now); err != nil {
+		t.Fatal(err)
+	}
+	shared := cveosv.NewClient(cveosv.Params{Endpoint: srv.URL, MinSeverity: "high", CacheTTL: time.Hour}, nil, func() time.Time { return now })
+	m := &Middleware{
+		client: shared, mode: cveosv.ModeDeny, onError: cveosv.OnErrorFailOpen,
+		cache: store, cacheDuration: time.Hour, now: func() time.Time { return now },
+		next: &fakeNext{hit: true, data: []byte("BYTES")},
+	}
+	ctx := testCtx("npm", "lodash", "4.17.20")
+	hit, err := m.Fetch(ctx)
+	if err != nil || !hit {
+		t.Fatalf("low-severity counts below threshold should serve, got hit=%v err=%v", hit, err)
+	}
+	if hits.Load() != 0 {
+		t.Fatalf("fresh DB hit should not query OSV, got %d hits", hits.Load())
+	}
+}
+
+func TestCacheDenyFromCountsMinSeverityHigh(t *testing.T) {
+	srv, hits := osvServer(t, nil)
+	store := newFakeStore()
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	if err := store.Put(context.Background(), "npm", "lodash", "4.17.20", cvecheckcache.Counts{Critical: 2, Low: 3}, now); err != nil {
+		t.Fatal(err)
+	}
+	shared := cveosv.NewClient(cveosv.Params{Endpoint: srv.URL, MinSeverity: "high", CacheTTL: time.Hour}, nil, func() time.Time { return now })
+	m := &Middleware{
+		client: shared, mode: cveosv.ModeDeny, onError: cveosv.OnErrorFailOpen,
+		cache: store, cacheDuration: time.Hour, now: func() time.Time { return now },
+		next: &fakeNext{hit: true, data: []byte("BYTES")},
+	}
+	_, err := m.Fetch(testCtx("npm", "lodash", "4.17.20"))
+	if err == nil {
+		t.Fatal("critical counts at/above threshold should deny")
+	}
+	if !strings.Contains(err.Error(), "2 critical") {
+		t.Fatalf("deny message should mention the critical band, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "low") {
+		t.Fatalf("deny message should not mention the low band below threshold, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "(cached)") {
+		t.Fatalf("deny message should be marked cached, got: %v", err)
+	}
+	if hits.Load() != 0 {
+		t.Fatalf("fresh DB hit should not query OSV, got %d hits", hits.Load())
+	}
+}
+
+func TestCacheHitShortCircuitsAfterInMemWarm(t *testing.T) {
+	srv, hits := osvServer(t, []cveosv.Vuln{{ID: "CVE-2026-9999"}})
+	store := newFakeStore()
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	m := newCachedMiddleware(srv.URL, store, time.Hour, now)
+	// First fetch: cache miss → OSV query → stored + in-mem cache warm.
+	if _, err := m.Fetch(testCtx("npm", "lodash", "4.17.20")); err == nil {
+		t.Fatal("first fetch should deny")
+	}
+	// Break the DB store: a second fetch must short-circuit on the in-mem cache
+	// and never touch the DB.
+	store.err = errors.New("db down")
+	if _, err := m.Fetch(testCtx("npm", "lodash", "4.17.20")); err == nil {
+		t.Fatal("second fetch should deny from the in-mem cache")
+	}
+	if hits.Load() != 1 {
+		t.Fatalf("in-mem cache should serve the second fetch: expected 1 OSV hit, got %d", hits.Load())
+	}
+}
+
+func TestDisabledCacheUnchanged(t *testing.T) {
+	srv, hits := osvServer(t, []cveosv.Vuln{{ID: "CVE-2026-9999"}})
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	m := New(cveosv.Params{Endpoint: srv.URL, CacheTTL: time.Hour}, nil, &fakeNext{hit: true, data: []byte("BYTES")}, func() time.Time { return now })
+	if _, err := m.Fetch(testCtx("npm", "lodash", "4.17.20")); err == nil {
+		t.Fatal("deny should reject")
+	}
+	if hits.Load() != 1 {
+		t.Fatalf("expected 1 OSV hit, got %d", hits.Load())
+	}
+}
+
+func TestCacheReadErrorFailOpen(t *testing.T) {
+	srv, hits := osvServer(t, []cveosv.Vuln{{ID: "CVE-2026-9999"}})
+	store := newFakeStore()
+	store.err = errors.New("db down")
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	m := newCachedMiddleware(srv.URL, store, time.Hour, now)
+	hit, err := m.Fetch(testCtx("npm", "lodash", "4.17.20"))
+	if err == nil || hit {
+		t.Fatalf("deny should reject after falling through to OSV, got hit=%v err=%v", hit, err)
+	}
+	if hits.Load() != 1 {
+		t.Fatalf("read error should fall through to OSV, got %d hits", hits.Load())
+	}
+}
+
+func TestCacheWriteErrorServesAnyway(t *testing.T) {
+	srv, hits := osvServer(t, []cveosv.Vuln{{ID: "CVE-2026-9999"}})
+	store := newFakeStore()
+	store.putErr = errors.New("db down")
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	m := newCachedMiddleware(srv.URL, store, time.Hour, now)
+	hit, err := m.Fetch(testCtx("npm", "lodash", "4.17.20"))
+	if err == nil || hit {
+		t.Fatalf("deny should still reject despite the write error, got hit=%v err=%v", hit, err)
+	}
+	if hits.Load() != 1 {
+		t.Fatalf("expected 1 OSV hit, got %d", hits.Load())
+	}
+}
+
+func TestUnknownRegistrySkipsCache(t *testing.T) {
+	srv, hits := osvServer(t, []cveosv.Vuln{{ID: "CVE-2026-9999"}})
+	store := newFakeStore()
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	m := newCachedMiddleware(srv.URL, store, time.Hour, now)
+	hit, err := m.Fetch(testCtx("maven", "g:a", "1.0"))
+	if err != nil || !hit {
+		t.Fatalf("unknown registry should serve, got hit=%v err=%v", hit, err)
+	}
+	if hits.Load() != 0 {
+		t.Fatalf("unknown registry should not query OSV, got %d hits", hits.Load())
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if len(store.items) != 0 {
+		t.Fatalf("unknown registry should not touch the cache, got %d items", len(store.items))
 	}
 }

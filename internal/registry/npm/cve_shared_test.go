@@ -1,11 +1,13 @@
 package npm
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -13,11 +15,13 @@ import (
 	"github.com/psenna/dependaproxy/internal/config"
 	"github.com/psenna/dependaproxy/internal/middleware/cveosv"
 	"github.com/psenna/dependaproxy/internal/middleware/mutation"
+	"github.com/psenna/dependaproxy/internal/middleware/retrieval/cvecheckcache"
 	"github.com/psenna/dependaproxy/internal/middleware/retrieval/cverecheck"
 	"github.com/psenna/dependaproxy/internal/middleware/retrieval/localcache"
 	"github.com/psenna/dependaproxy/internal/middleware/validation/cve"
 	"github.com/psenna/dependaproxy/internal/pipeline"
 	"github.com/psenna/dependaproxy/internal/project"
+	"github.com/psenna/dependaproxy/internal/storage/db"
 )
 
 // countingOSV is a fake OSV endpoint returning the given vuln list for any
@@ -159,6 +163,110 @@ func TestCveSharedClientCleanServesOnce(t *testing.T) {
 	}
 	if hits.Load() != 1 {
 		t.Fatalf("shared cache should serve the validation stage: expected 1 OSV hit, got %d", hits.Load())
+	}
+}
+
+// newCveCacheAdapter builds the npm adapter with the retrieval
+// cve-check-retrieval middleware wired to a persistent cvecheckcache.Store
+// (mirroring the adapter Factory when cache_enabled is set), so a serve can be
+// answered from the DB cache without an OSV round-trip.
+func newCveCacheAdapter(t *testing.T, osvURL string, cache cvecheckcache.Store, cacheDuration time.Duration, client RegistryClient, store Store) *npmAdapter {
+	t.Helper()
+	dir := t.TempDir()
+	shared := cveosv.NewClient(cveosv.Params{Endpoint: osvURL, CacheTTL: time.Hour}, nil, func() time.Time { return time.Now().UTC() })
+
+	reg := pipeline.NewRegistry()
+	reg.RegisterValidation("min-publication-age", MinPubFactory)
+	reg.RegisterRetrieval("cve-check-retrieval", cverecheck.FactoryWithClientAndCache(shared, cache, cacheDuration, func() time.Time { return time.Now().UTC() }))
+	reg.RegisterRetrieval("local-disk-cache", localcache.Factory)
+	reg.RegisterRetrieval("upstream-registry", UpstreamFactory(client))
+	reg.RegisterMutation("noop", mutation.Factory)
+
+	validation, err := reg.BuildValidation([]config.Middleware{
+		{Type: "min-publication-age", Params: yamlNode("min_days: 0")}, // age gate off; only cve-check-retrieval gates
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	retrieval, err := reg.BuildRetrieval([]config.Middleware{
+		{Type: "cve-check-retrieval", Params: yamlNode("mode: deny")},
+		{Type: "local-disk-cache", Params: yamlNode("path: " + dir)},
+		{Type: "upstream-registry"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mp, err := reg.BuildMutation(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mp.Chain = []pipeline.MutationMiddleware{mutation.NoOp{}}
+
+	global := &project.Resolved{Validation: validation, Retrieval: retrieval, Mutation: mp}
+	if e, ok := retrieval.Head.(pipeline.Evictor); ok {
+		global.Cache = e
+	}
+	resolver := project.NewResolver("npm", reg, fakeProjectStore{}, global)
+	return &npmAdapter{
+		prefix:   "/npm",
+		storage:  store,
+		client:   client,
+		resolver: resolver,
+		logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+		now:      func() time.Time { return time.Now().UTC() },
+	}
+}
+
+// TestCveRetrievalCacheSurvivesRestart proves the persistent Postgres cache
+// serves a second adapter instance (a "restart" with a fresh in-memory cache)
+// from the DB: the first serve queries OSV once and stores severity-band counts;
+// the second serve is denied from the DB cache with zero OSV round-trips.
+func TestCveRetrievalCacheSurvivesRestart(t *testing.T) {
+	dsn := os.Getenv("DP_TEST_PG_DSN")
+	if dsn == "" {
+		t.Skip("DP_TEST_PG_DSN not set; skipping cve cache postgres test")
+	}
+	ctx := context.Background()
+	d, err := db.OpenPostgres(ctx, dsn)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { _ = d.Close() })
+	if _, err := d.ExecContext(ctx, `DELETE FROM middleware_retrieval_cvecheck_cache`); err != nil {
+		t.Fatalf("clean cache: %v", err)
+	}
+
+	osv, hits := countingOSV(t, []cveosv.Vuln{{ID: "CVE-2026-0001", Summary: "arbitrary code execution"}})
+	store := newMemStore()
+	pack, raw := buildPack(time.Now().Add(-30*24*time.Hour), []byte("TARBALL"))
+	client := &rawClient{pack: pack, raw: raw, tarball: []byte("TARBALL")}
+
+	cache, err := cvecheckcache.OpenStore(ctx, d)
+	if err != nil {
+		t.Fatalf("open cache: %v", err)
+	}
+
+	// First "instance": cache miss → OSV query → counts stored in Postgres.
+	a1 := newCveCacheAdapter(t, osv.URL, cache, 7*24*time.Hour, client, store)
+	srv1 := newTestServer(t, a1)
+	code, _ := fetchViaProxy(t, srv1.URL+"/npm", "testpkg", "1.0.0")
+	if code != http.StatusForbidden {
+		t.Fatalf("request 1 should be denied (vulnerable), got %d", code)
+	}
+	if hits.Load() != 1 {
+		t.Fatalf("request 1 should query OSV once, got %d hits", hits.Load())
+	}
+
+	// "Restart": a fresh adapter instance (fresh in-memory cache) over the same
+	// DB. The second serve must be denied from the DB cache with zero OSV hits.
+	a2 := newCveCacheAdapter(t, osv.URL, cache, 7*24*time.Hour, client, store)
+	srv2 := newTestServer(t, a2)
+	code2, _ := fetchViaProxy(t, srv2.URL+"/npm", "testpkg", "1.0.0")
+	if code2 != http.StatusForbidden {
+		t.Fatalf("request 2 should be denied from the DB cache, got %d", code2)
+	}
+	if hits.Load() != 1 {
+		t.Fatalf("request 2 should be served from the DB cache: expected 1 total OSV hit, got %d", hits.Load())
 	}
 }
 

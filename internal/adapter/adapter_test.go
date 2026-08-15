@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/psenna/dependaproxy/internal/config"
 	"github.com/psenna/dependaproxy/internal/middleware/cveosv"
@@ -88,6 +89,58 @@ func TestCVESharedParams(t *testing.T) {
 	}
 	if pr := CVESharedParams(cfg); pr.MinSeverity != "medium" {
 		t.Fatalf("retrieval cve-check-retrieval min_severity should be carried, got %q", pr.MinSeverity)
+	}
+
+	// cache_enabled/cache_duration are ALWAYS sourced from the retrieval
+	// cve-check-retrieval block, even when validation cve-check wins the shared
+	// client fields.
+	cfg = config.RegistryConfig{
+		Validation: []config.Middleware{
+			{Type: "cve-check", Params: yamlNode("endpoint: http://val.example")},
+		},
+		Retrieval: []config.Middleware{
+			{Type: "cve-check-retrieval", Params: yamlNode("endpoint: http://ret.example\ncache_enabled: true\ncache_duration: 24h")},
+		},
+	}
+	pr := CVESharedParams(cfg)
+	if pr.Endpoint != "http://val.example" {
+		t.Fatalf("validation cve-check should win the shared client endpoint, got %q", pr.Endpoint)
+	}
+	if !pr.CacheEnabled {
+		t.Fatal("cache_enabled should be sourced from the retrieval cve-check-retrieval block")
+	}
+	if pr.CacheDuration != 24*time.Hour {
+		t.Fatalf("cache_duration should be sourced from the retrieval cve-check-retrieval block, got %v", pr.CacheDuration)
+	}
+
+	// With only a validation cve-check (no retrieval cve-check-retrieval), the
+	// cache fields stay at their zero values.
+	cfg = config.RegistryConfig{
+		Validation: []config.Middleware{
+			{Type: "cve-check", Params: yamlNode("endpoint: http://val.example")},
+		},
+	}
+	pr = CVESharedParams(cfg)
+	if pr.CacheEnabled {
+		t.Fatal("cache_enabled should default false when no retrieval cve-check-retrieval is configured")
+	}
+	if pr.CacheDuration != 0 {
+		t.Fatalf("cache_duration should default zero when no retrieval cve-check-retrieval is configured, got %v", pr.CacheDuration)
+	}
+
+	// A retrieval-only config sources both the shared fields and the cache
+	// fields from the same block.
+	cfg = config.RegistryConfig{
+		Retrieval: []config.Middleware{
+			{Type: "cve-check-retrieval", Params: yamlNode("endpoint: http://ret.example\ncache_enabled: true\ncache_duration: 48h")},
+		},
+	}
+	pr = CVESharedParams(cfg)
+	if pr.Endpoint != "http://ret.example" {
+		t.Fatalf("retrieval-only endpoint should be carried, got %q", pr.Endpoint)
+	}
+	if !pr.CacheEnabled || pr.CacheDuration != 48*time.Hour {
+		t.Fatalf("retrieval-only cache fields should be carried, got %+v", pr)
 	}
 }
 
