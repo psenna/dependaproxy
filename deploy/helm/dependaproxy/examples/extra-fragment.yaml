@@ -1,0 +1,25 @@
+# kubectl apply -f extra-fragment.yaml
+# Then set:
+#   extraConfigFragments:
+#     - existingSecret: dependaproxy-extra
+#       key: extra.yaml
+#
+# WARNING: the fragment's top-level key(s) must NOT duplicate:
+#   - any key the chart's ConfigMap already renders: server, log, registries
+#   - any key another fragment already supplies: auth, storage
+# A duplicate top-level YAML key in the assembled config.yaml is a parse
+# error and the pod will crash-loop (assemble-config concatenates every
+# fragment verbatim; it does not deep-merge them).
+#
+# Use this only for a genuinely new top-level config.yaml key a future
+# dependaproxy release might add and that you don't want sitting in
+# values.yaml (or plain-text in the ConfigMap).
+apiVersion: v1
+kind: Secret
+metadata:
+  name: dependaproxy-extra
+type: Opaque
+stringData:
+  extra.yaml: |
+    some_future_top_level_key:
+      example_field: "CHANGE-ME"

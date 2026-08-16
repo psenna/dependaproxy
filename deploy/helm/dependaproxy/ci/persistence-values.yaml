@@ -1,0 +1,14 @@
+# Default fixture plus a persistent cache PVC on a single replica (the happy
+# path for enabling persistence.cache).
+auth:
+  existingSecret: dependaproxy-auth
+storage:
+  existingSecret: dependaproxy-storage
+
+persistence:
+  cache:
+    enabled: true
+    size: 5Gi
+    storageClass: standard
+
+replicaCount: 1

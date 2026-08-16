@@ -1,0 +1,24 @@
+# Default fixture plus an Ingress with a real-world nginx annotation set and
+# TLS.
+auth:
+  existingSecret: dependaproxy-auth
+storage:
+  existingSecret: dependaproxy-storage
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-body-size: "0"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "600"
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "10"
+  hosts:
+    - host: dependaproxy.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: dependaproxy-tls
+      hosts: [dependaproxy.example.com]

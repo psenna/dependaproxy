@@ -457,6 +457,19 @@ With `auth.token` set, configure the credential too (`npm config set
 //localhost:8080/:_authToken <token>`, `pip config set global.index-url
 http://user:token@localhost:8080/pypi/simple`).
 
+## Kubernetes (Helm)
+
+A Helm chart runs dependaproxy on Kubernetes, with a Deployment, Service,
+optional Ingress, and optional bundled PostgreSQL for quick evaluation.
+
+```sh
+helm install dependaproxy oci://ghcr.io/psenna/charts/dependaproxy --version <chart-version>
+```
+
+See [`deploy/helm/dependaproxy/README.md`](deploy/helm/dependaproxy/README.md)
+for the full chart reference, or [`docs/kubernetes.md`](docs/kubernetes.md)
+for a shorter walkthrough.
+
 ## Development & testing
 
 ```sh

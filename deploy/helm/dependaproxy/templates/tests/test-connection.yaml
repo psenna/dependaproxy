@@ -1,0 +1,58 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ include "dependaproxy.fullname" . }}-test-connection
+  labels:
+    {{- include "dependaproxy.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": test
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  restartPolicy: Never
+  securityContext:
+    {{- toYaml .Values.podSecurityContext | nindent 4 }}
+  containers:
+    - name: test-connection
+      image: "{{ .Values.tests.image.repository }}:{{ .Values.tests.image.tag }}"
+      securityContext:
+        {{- toYaml .Values.securityContext | nindent 8 }}
+      command: ["/bin/sh", "-c"]
+      args:
+        - |
+          set -eu
+          host="{{ include "dependaproxy.fullname" . }}"
+          port="{{ .Values.service.port }}"
+          base="http://$host:$port"
+
+          echo "checking $base/healthz ..."
+          body="$(curl -fsS "$base/healthz")"
+          if [ "$body" != "ok" ]; then
+            echo "FAIL: /healthz body was '$body', expected 'ok'"
+            exit 1
+          fi
+          echo "OK: /healthz returned 'ok'"
+
+          echo "checking $base/ (public SPA shell) ..."
+          code="$(curl -s -o /dev/null -w '%{http_code}' "$base/")"
+          if [ "$code" != "200" ]; then
+            echo "FAIL: / returned $code, expected 200"
+            exit 1
+          fi
+          echo "OK: / returned 200"
+
+          echo "checking $base/admin/projects without a token ..."
+          code="$(curl -s -o /dev/null -w '%{http_code}' "$base/admin/projects")"
+          if [ "$code" != "401" ]; then
+            echo "FAIL: /admin/projects (no token) returned $code, expected 401"
+            exit 1
+          fi
+          echo "OK: /admin/projects returned 401 without a token"
+
+          echo "all checks passed"
+      volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+  volumes:
+    - name: tmp
+      emptyDir:
+        sizeLimit: 16Mi

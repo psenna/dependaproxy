@@ -1,0 +1,60 @@
+dependaproxy has been installed.
+
+1. Reach the service:
+
+{{- if .Values.ingress.enabled }}
+{{- range .Values.ingress.hosts }}
+{{- range .paths }}
+  http{{ if $.Values.ingress.tls }}s{{ end }}://{{ .host }}{{ .path }}
+{{- end }}
+{{- end }}
+{{- else }}
+  kubectl port-forward svc/{{ include "dependaproxy.fullname" . }} 8080:{{ .Values.service.port }}
+
+  Then:
+  curl http://localhost:8080/healthz     # expect body: ok
+{{- end }}
+
+{{- if .Values.postgresql.enabled }}
+
+------------------------------------------------------------------------------
+DEV / DEMO ONLY -- NOT FOR PRODUCTION
+------------------------------------------------------------------------------
+postgresql.enabled=true is bundling a single-instance, hand-rolled PostgreSQL.
+No HA, no replication, no backups, no restore, no PITR, no connection
+pooling, no TLS, no upgrade path between major versions. Losing this pod's
+PVC loses your entire deny list, project configs, and dependency/SBOM
+records -- dependaproxy keeps ALL authoritative state here.
+
+For production: set postgresql.enabled=false and point storage.existingSecret
+at a managed / HA PostgreSQL instead.
+------------------------------------------------------------------------------
+{{- end }}
+
+2. Rotating a Secret:
+
+Secret *content* changes (rotating a token/password) are not auto-detected --
+after rotating auth.existingSecret, storage.existingSecret, or any Secret
+referenced from config.registriesExistingSecret / extraConfigFragments, run:
+
+  kubectl rollout restart deployment/{{ include "dependaproxy.fullname" . }}
+
+{{- if gt (int .Values.replicaCount) 1 }}
+
+3. Cache hit rate with {{ .Values.replicaCount }} replicas:
+
+Each pod's local-disk-cache is independent, so cache hit rate degrades
+roughly 1/N across replicas. For a cache that's actually shared, configure
+the s3-cache retrieval middleware (via config.registriesExistingSecret)
+instead of relying on per-pod local-disk-cache.
+{{- end }}
+
+{{- if .Values.ingress.enabled }}
+
+4. Security note:
+
+`/` (the dashboard SPA shell) and `/healthz` are unauthenticated by the app
+itself; only `/admin/*` and the registry prefixes (e.g. `/npm/*`, `/pypi/*`)
+are token-gated. Restrict network access to the Ingress accordingly if that
+matters for your deployment.
+{{- end }}

@@ -1,0 +1,333 @@
+# Default values for the dependaproxy chart.
+# This is a YAML-formatted file. Declared as a schema in values.schema.json.
+
+# Number of Deployment replicas. Each pod's local-disk-cache hit rate falls
+# roughly proportionally with replica count unless you switch to the shared
+# s3-cache retrieval middleware (see config.registriesExistingSecret below) or
+# enable persistence.cache with a ReadWriteMany StorageClass.
+replicaCount: 1
+
+# Overrides the "dependaproxy" default used in name/label templates.
+nameOverride: ""
+# Overrides the computed "<release>-dependaproxy" resource name prefix.
+fullnameOverride: ""
+
+# Extra labels merged onto every object this chart renders, on top of the
+# standard app.kubernetes.io/* set (e.g. for a shared cost-center or team tag).
+commonLabels: {}
+
+image:
+  repository: ghcr.io/psenna/dependaproxy
+  # Falls back to Chart.AppVersion when empty; there is no :latest tag
+  # published on ghcr.io/psenna/dependaproxy, ever -- every image is tagged
+  # with a verbatim release tag (e.g. "v0.0.5").
+  tag: ""
+  # When set, wins over tag (image is referenced by @sha256:... digest).
+  digest: ""
+  pullPolicy: IfNotPresent
+
+# Pull secrets for a private image registry.
+imagePullSecrets: []
+
+serviceAccount:
+  create: true
+  # Overrides the computed ServiceAccount name (defaults to the fullname).
+  name: ""
+  annotations: {}
+
+podAnnotations: {}
+podLabels: {}
+
+# The container drops root and runs as the numeric uid baked into the
+# Dockerfile (there is no /etc/passwd entry for it, so it must be set
+# numerically here rather than by username).
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  fsGroupChangePolicy: OnRootMismatch
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  # readOnlyRootFilesystem stays compatible with guarddog-scan because the
+  # writable paths guarddog and the app actually need (cache, tmp, home, and
+  # the guarddog venv) are each given their own explicit writable mount --
+  # see cache.*, tmp.*, home.* and guarddog.writableVenv.* below.
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: [ALL]
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+    ephemeral-storage: 1Gi
+  limits:
+    cpu: 2
+    memory: 2Gi
+    ephemeral-storage: 4Gi
+
+livenessProbe:
+  initialDelaySeconds: 10
+  periodSeconds: 20
+  timeoutSeconds: 3
+  failureThreshold: 3
+
+readinessProbe:
+  initialDelaySeconds: 3
+  periodSeconds: 10
+  timeoutSeconds: 3
+  failureThreshold: 3
+
+# ~150s total budget (periodSeconds * failureThreshold) for schema apply +
+# adapter build against a cold DB before liveness/readiness probing begins.
+startupProbe:
+  periodSeconds: 5
+  failureThreshold: 30
+
+terminationGracePeriodSeconds: 45
+
+nodeSelector: {}
+affinity: {}
+tolerations: []
+topologySpreadConstraints: []
+priorityClassName: ""
+
+# Extra environment variables / envFrom sources merged onto the main
+# container, appended after the chart's own entries.
+extraEnv: []
+extraEnvFrom: []
+
+# ---------------------------------------------------------------------------
+# auth.token + auth.admin_token live inside config.yaml with no other
+# injection path (the binary has no env-var overrides). The ConfigMap NEVER
+# renders an `auth:` key -- you must pre-create a Secret holding a verbatim
+# `auth:` YAML block. See examples/auth-secret.yaml. REQUIRED, no default.
+# ---------------------------------------------------------------------------
+auth:
+  existingSecret: ""
+  key: auth.yaml
+
+# storage.dsn embeds the Postgres password. The ConfigMap NEVER renders a
+# `storage:` key. REQUIRED unless postgresql.enabled=true (below), in which
+# case the chart generates and wires its own Secret automatically.
+storage:
+  existingSecret: ""
+  key: storage.yaml
+
+# Generic escape hatch for any other sensitive top-level config.yaml key a
+# future dependaproxy release might add. Each entry's Secret content is
+# concatenated verbatim; it must NOT duplicate a key the ConfigMap already
+# renders (server, log, registries).
+extraConfigFragments: []
+# extraConfigFragments:
+#   - existingSecret: my-extra-secret
+#     key: extra.yaml
+
+config:
+  server:
+    addr: ":8080"
+
+  log:
+    level: info    # debug | info | warn | error
+    format: json   # json | text
+
+  # When set, the ENTIRE registries: block comes from this Secret instead of
+  # being rendered from config.registries below (which must then be empty).
+  # This is the supported way to configure s3-cache (its access_key/secret_key
+  # live inside registries[].retrieval[].params, so they can't otherwise be
+  # kept out of values.yaml). See examples/registries-secret.yaml.
+  registriesExistingSecret: ""
+  registriesKey: registries.yaml
+
+  # Mirrors config.example.yaml's active configuration. Every local-disk-cache
+  # path below is already under the chart's writable cache mount
+  # (cache.mountPath) -- see templates/_helpers.tpl's validateCachePaths.
+  registries:
+    - type: npm
+      prefix: /npm
+      upstream: https://registry.npmjs.org
+      validation:
+        - type: deny-list-check
+        - type: min-publication-age
+          params:
+            min_days: 7
+        - type: cve-check
+          params:
+            mode: deny
+        - type: malware-scan
+          params:
+            mode: warn
+        - type: guarddog-scan
+          params:
+            mode: deny
+            on_error: fail_open
+            timeout: 60s
+      retrieval:
+        - type: cve-check-retrieval
+          params:
+            mode: deny
+            on_error: fail_open
+            cache_ttl: 1h
+        - type: local-disk-cache
+          params:
+            path: /var/lib/dependaproxy/cache/npm
+        - type: upstream-registry
+    - type: pypi
+      prefix: /pypi
+      upstream: https://pypi.org/simple
+      validation:
+        - type: deny-list-check
+        - type: min-publication-age
+          params:
+            min_days: 7
+        - type: cve-check
+          params:
+            mode: deny
+        - type: malware-scan
+          params:
+            mode: warn
+        - type: guarddog-scan
+          params:
+            mode: deny
+            on_error: fail_open
+            timeout: 60s
+      retrieval:
+        - type: cve-check-retrieval
+          params:
+            mode: deny
+            on_error: fail_open
+            cache_ttl: 1h
+        - type: local-disk-cache
+          params:
+            path: /var/lib/dependaproxy/cache/pypi
+        - type: upstream-registry
+    # goproxy is active in the repo's own config.example.yaml; uncomment to
+    # also serve Go modules. It has no guarddog/malware validation chain, so
+    # it is NOT enabled by default (weakens the default posture).
+    # - type: goproxy
+    #   prefix: /goproxy
+    #   upstream: https://proxy.golang.org
+    #   retrieval:
+    #     - type: local-disk-cache
+    #       params:
+    #         path: /var/lib/dependaproxy/cache/goproxy
+    #     - type: upstream-registry
+
+cache:
+  mountPath: /var/lib/dependaproxy/cache
+  # Rejects a local-disk-cache middleware whose params.path escapes
+  # cache.mountPath, the only writable cache mount this chart provides (the
+  # container runs with readOnlyRootFilesystem: true).
+  enforcePathPrefix: true
+  # Size of the emptyDir backing the cache mount; only used when
+  # persistence.cache.enabled=false.
+  emptyDirSizeLimit: 20Gi
+
+tmp:
+  # guarddog stages each scanned artifact here; sized for concurrent cold
+  # fetches under readOnlyRootFilesystem.
+  sizeLimit: 2Gi
+
+home:
+  sizeLimit: 128Mi
+
+guarddog:
+  # guarddog writes resource files (e.g. top_npm_packages.json) inside its own
+  # site-packages at runtime; under readOnlyRootFilesystem that venv directory
+  # needs its own writable overlay mount. See chart README "GuardDog &
+  # readOnlyRootFilesystem".
+  writableVenv:
+    enabled: true
+    path: /opt/guarddog-venv
+    # Measured venv size ~143Mi; this gives ~3.5x headroom.
+    sizeLimit: 512Mi
+
+persistence:
+  cache:
+    # emptyDir by default; the cache is disposable and rebuilds from upstream.
+    enabled: false
+    existingClaim: ""
+    storageClass: ""
+    accessModes: [ReadWriteOnce]
+    size: 20Gi
+    annotations: {}
+    labels: {}
+    # See templates/_helpers.tpl validateCacheReplicas: escape hatch for
+    # multi-replica deployments that pin every replica to one node.
+    ignoreAccessModeCheck: false
+
+service:
+  type: ClusterIP
+  port: 8080
+  nodePort: ""
+  annotations: {}
+  labels: {}
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: dependaproxy.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+# ==============================================================================
+# DEV / DEMO ONLY -- NOT FOR PRODUCTION
+# ------------------------------------------------------------------------------
+# A single-instance, hand-rolled PostgreSQL. No HA, no replication, no
+# backups, no restore, no PITR, no connection pooling, no TLS, no upgrade path
+# between major versions. Losing this pod's PVC loses your entire deny list,
+# project configs, and dependency/SBOM records -- dependaproxy keeps ALL
+# authoritative state here.
+#
+# For production: leave postgresql.enabled=false and point storage.existingSecret
+# at a managed / HA PostgreSQL instead.
+# ==============================================================================
+postgresql:
+  enabled: false
+  image:
+    repository: postgres
+    tag: "18"
+    pullPolicy: IfNotPresent
+  auth:
+    username: dependaproxy
+    database: dependaproxy
+    sslmode: disable
+  persistence:
+    existingClaim: ""
+    storageClass: ""
+    accessModes: [ReadWriteOnce]
+    size: 8Gi
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 1
+      memory: 1Gi
+  # The "postgres" user baked into the official postgres image.
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 999
+    runAsGroup: 999
+    fsGroup: 999
+    seccompProfile:
+      type: RuntimeDefault
+  waitForDatabase:
+    enabled: true
+  nodeSelector: {}
+  affinity: {}
+  tolerations: []
+
+tests:
+  image:
+    repository: curlimages/curl
+    tag: "8.11.1"
+  checkRegistryAuth: false

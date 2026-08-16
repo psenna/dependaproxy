@@ -1,0 +1,21 @@
+apiVersion: v2
+name: dependaproxy
+description: Supply-chain-safe dependency proxy for npm, PyPI, Go modules and Maven
+type: application
+version: 0.1.0
+appVersion: "v0.0.5"
+kubeVersion: ">=1.23.0-0"
+home: https://github.com/psenna/dependaproxy
+sources:
+  - https://github.com/psenna/dependaproxy
+keywords:
+  - proxy
+  - npm
+  - pypi
+  - supply-chain
+  - security
+  - sbom
+  - guarddog
+maintainers:
+  - name: psenna
+    url: https://github.com/psenna

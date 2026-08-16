@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, "feat/*"]
+    branches: [main]
   pull_request:
     branches: [main]
 
@@ -135,17 +135,45 @@ jobs:
           retention-days: 7
 
   docker-build:
-    name: docker build (web-build stage + Go embed, amd64 + arm64)
+    name: docker build (web-build stage + Go embed, ${{ matrix.platform }})
     runs-on: ubuntu-latest
+    # A cold arm64 leg runs npm ci (web-build) and pip install guarddog (the
+    # guarddog-builder stage) entirely under QEMU emulation, which can
+    # genuinely take 20-40+ minutes. Bound it explicitly so a real hang fails
+    # fast with a clear TIMEOUT rather than surfacing later as an ambiguous
+    # "The operation was canceled." on whatever step happened to be running.
+    timeout-minutes: 45
+    strategy:
+      # One platform's failure (or a runner interruption) must not cascade-
+      # cancel the other's in-flight build -- that cancellation is exactly
+      # what previously showed up as a confusing "operation was canceled" on
+      # an unrelated step. fail-fast: false keeps the legs independent.
+      fail-fast: false
+      matrix:
+        platform: [linux/amd64, linux/arm64]
     steps:
       - uses: actions/checkout@v4
       - name: set up QEMU
+        if: matrix.platform != 'linux/amd64'
         uses: docker/setup-qemu-action@v3
       - name: set up Buildx
         uses: docker/setup-buildx-action@v3
-      - name: docker build (multi-arch)
-        run: docker buildx build --platform linux/amd64,linux/arm64 -t dependaproxy:ci .
+      - name: docker build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          push: false
+          tags: dependaproxy:ci
+          # GitHub Actions cache backend, scoped per platform so amd64/arm64
+          # layers never evict each other. On an unchanged package-lock.json /
+          # go.sum / guarddog pin, this turns the slow npm-ci-under-QEMU and
+          # pip-install-under-QEMU layers into cache hits on every subsequent
+          # run -- the main lever against this job timing out again.
+          cache-from: type=gha,scope=dependaproxy-docker-build-${{ matrix.platform }}
+          cache-to: type=gha,mode=max,scope=dependaproxy-docker-build-${{ matrix.platform }}
       - name: assert web-build stage produced dist
+        if: matrix.platform == 'linux/amd64'
         run: |
           # --load: with the docker-container driver, buildx doesn't put the
           # image in the local daemon unless --load is given; docker run needs it.
