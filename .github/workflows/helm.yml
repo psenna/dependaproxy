@@ -2,7 +2,7 @@ name: helm
 
 on:
   push:
-    branches: [main, "feat/*"]
+    branches: [main]
     paths: ['deploy/helm/**', '.github/workflows/helm.yml']
   pull_request:
     branches: [main]
