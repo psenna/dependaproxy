@@ -1,0 +1,62 @@
+# Default fixture plus the writable guarddog venv overlay disabled and every
+# guarddog-scan entry removed from the registries' validation chains (proves
+# the chart works with the venv mount turned off entirely).
+auth:
+  existingSecret: dependaproxy-auth
+storage:
+  existingSecret: dependaproxy-storage
+
+guarddog:
+  writableVenv:
+    enabled: false
+
+config:
+  registries:
+    - type: npm
+      prefix: /npm
+      upstream: https://registry.npmjs.org
+      validation:
+        - type: deny-list-check
+        - type: min-publication-age
+          params:
+            min_days: 7
+        - type: cve-check
+          params:
+            mode: deny
+        - type: malware-scan
+          params:
+            mode: warn
+      retrieval:
+        - type: cve-check-retrieval
+          params:
+            mode: deny
+            on_error: fail_open
+            cache_ttl: 1h
+        - type: local-disk-cache
+          params:
+            path: /var/lib/dependaproxy/cache/npm
+        - type: upstream-registry
+    - type: pypi
+      prefix: /pypi
+      upstream: https://pypi.org/simple
+      validation:
+        - type: deny-list-check
+        - type: min-publication-age
+          params:
+            min_days: 7
+        - type: cve-check
+          params:
+            mode: deny
+        - type: malware-scan
+          params:
+            mode: warn
+      retrieval:
+        - type: cve-check-retrieval
+          params:
+            mode: deny
+            on_error: fail_open
+            cache_ttl: 1h
+        - type: local-disk-cache
+          params:
+            path: /var/lib/dependaproxy/cache/pypi
+        - type: upstream-registry

@@ -1,0 +1,143 @@
+name: helm
+
+on:
+  push:
+    branches: [main, "feat/*"]
+    paths: ['deploy/helm/**', '.github/workflows/helm.yml']
+  pull_request:
+    branches: [main]
+    paths: ['deploy/helm/**', '.github/workflows/helm.yml']
+
+concurrency:
+  group: helm-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  lint-and-template:
+    name: helm lint + template + schema validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.4
+
+      - name: helm lint --strict (every fixture)
+        run: |
+          set -eu
+          for f in deploy/helm/dependaproxy/ci/*.yaml; do
+            echo "=== lint: $f ==="
+            helm lint --strict deploy/helm/dependaproxy -f "$f"
+          done
+
+      - name: helm template (every fixture) -> rendered/
+        run: |
+          set -eu
+          mkdir -p rendered
+          for f in deploy/helm/dependaproxy/ci/*.yaml; do
+            name="$(basename "$f" .yaml)"
+            echo "=== template: $f ==="
+            helm template dp deploy/helm/dependaproxy -f "$f" > "rendered/$name.yaml"
+          done
+
+      - name: "assert no auth:/storage: leak into the ConfigMap"
+        run: |
+          set -eu
+          for f in rendered/*.yaml; do
+            if awk '/^kind: ConfigMap$/,/^---$/' "$f" | grep -qE '^\s{4}(auth|storage):'; then
+              echo "LEAK: $f renders a top-level auth:/storage: key inside the ConfigMap"
+              exit 1
+            fi
+          done
+          echo "OK: no fixture leaks auth:/storage: into a ConfigMap"
+
+      - name: "assert exactly one registries: in the default render, zero when sourced from a Secret"
+        run: |
+          set -eu
+          n_default=$(grep -c '^    registries:' rendered/default-values.yaml || true)
+          [ "$n_default" = "1" ] || { echo "expected exactly one registries: in rendered/default-values.yaml, got $n_default"; exit 1; }
+          n_secret=$(grep -c '^    registries:' rendered/registries-from-secret-values.yaml || true)
+          [ "$n_secret" = "0" ] || { echo "expected zero registries: in rendered/registries-from-secret-values.yaml, got $n_secret"; exit 1; }
+          echo "OK"
+
+      - name: kubeconform (strict)
+        run: |
+          set -eu
+          curl -fsSL https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-amd64.tar.gz | tar xz kubeconform
+          ./kubeconform -strict -summary -kubernetes-version 1.29.0 -ignore-missing-schemas rendered/*.yaml
+
+      - name: render-time guard matrix (each must fail with the stated message)
+        run: |
+          set -eu
+          assert_fails() {
+            desc="$1"; shift
+            want="$1"; shift
+            if out="$(helm template dp deploy/helm/dependaproxy "$@" 2>&1)"; then
+              echo "EXPECTED FAILURE DID NOT HAPPEN: $desc"
+              echo "$out"
+              exit 1
+            fi
+            if ! echo "$out" | grep -qF "$want"; then
+              echo "FAILURE MESSAGE MISMATCH for: $desc"
+              echo "expected to contain: $want"
+              echo "got:"
+              echo "$out"
+              exit 1
+            fi
+            echo "OK: $desc"
+          }
+
+          assert_fails "missing auth.existingSecret" \
+            "auth.existingSecret is required" \
+            --set auth.existingSecret=
+
+          assert_fails "missing storage.existingSecret (postgresql disabled)" \
+            "storage.existingSecret is required" \
+            --set auth.existingSecret=x --set storage.existingSecret=
+
+          assert_fails "ambiguous storage config" \
+            "Ambiguous storage configuration" \
+            -f deploy/helm/dependaproxy/ci/bundled-postgres-values.yaml --set storage.existingSecret=x
+
+          assert_fails "registries + registriesExistingSecret both set" \
+            "mutually exclusive" \
+            -f deploy/helm/dependaproxy/ci/default-values.yaml --set config.registriesExistingSecret=r
+
+          assert_fails "empty registries with no secret" \
+            "at least one registry is required" \
+            --set auth.existingSecret=x --set storage.existingSecret=x --set-json config.registries='[]'
+
+          # NOTE: --set replaces whole lists rather than merging them element-wise,
+          # so indexing into the chart's default config.registries (e.g.
+          # registries[0].retrieval[1].params.path=...) silently nulls out
+          # retrieval[0] and fails schema validation before this guard ever runs.
+          # Supply a complete minimal registries array instead.
+          assert_fails "local-disk-cache path outside the mount" \
+            "must live under" \
+            -f deploy/helm/dependaproxy/ci/default-values.yaml \
+            --set-json 'config.registries=[{"prefix":"/npm","retrieval":[{"type":"local-disk-cache","params":{"path":"/nope"}}]}]'
+
+          assert_fails "unparseable server.addr port" \
+            "could not parse a numeric port" \
+            -f deploy/helm/dependaproxy/ci/default-values.yaml --set config.server.addr=:http
+
+          assert_fails "cache PVC RWO + replicaCount>1" \
+            "FailedAttachVolume" \
+            -f deploy/helm/dependaproxy/ci/default-values.yaml --set persistence.cache.enabled=true --set replicaCount=2
+
+  ct-lint:
+    name: chart-testing lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.4
+      - uses: helm/chart-testing-action@v2
+      - name: ct lint
+        run: ct lint --config deploy/helm/ct.yaml

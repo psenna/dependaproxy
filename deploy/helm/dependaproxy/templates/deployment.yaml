@@ -1,0 +1,253 @@
+{{- include "dependaproxy.validate" . -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "dependaproxy.fullname" . }}
+  labels:
+    {{- include "dependaproxy.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  revisionHistoryLimit: 10
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      {{- include "dependaproxy.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "dependaproxy.labels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret-refs: {{ printf "%s/%s|%s/%s|%s/%s|%v"
+            (include "dependaproxy.auth.secretName" .) (include "dependaproxy.auth.secretKey" .)
+            (include "dependaproxy.storage.secretName" .) (include "dependaproxy.storage.secretKey" .)
+            .Values.config.registriesExistingSecret .Values.config.registriesKey
+            .Values.extraConfigFragments | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "dependaproxy.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      initContainers:
+        # 1. copy-guarddog-venv (order matters: this is slowest+independent, runs first)
+        {{- if .Values.guarddog.writableVenv.enabled }}
+        - name: copy-guarddog-venv
+          image: {{ include "dependaproxy.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              if [ -f /venv-rw/pyvenv.cfg ]; then echo "venv already populated; skipping"; exit 0; fi
+              cp -a {{ .Values.guarddog.writableVenv.path }}/. /venv-rw/
+          securityContext:
+            {{- toYaml $.Values.securityContext | nindent 12 }}
+          volumeMounts:
+            - name: guarddog-venv
+              mountPath: /venv-rw
+        {{- end }}
+        # 2. wait-for-postgresql (only for the bundled path; external Postgres relies on the app's own crash-loop-until-reachable behavior)
+        {{- if and .Values.postgresql.enabled .Values.postgresql.waitForDatabase.enabled }}
+        - name: wait-for-postgresql
+          image: "{{ .Values.postgresql.image.repository }}:{{ .Values.postgresql.image.tag }}"
+          imagePullPolicy: {{ .Values.postgresql.image.pullPolicy }}
+          command: ["sh", "-c"]
+          args:
+            - |
+              until pg_isready -h {{ include "dependaproxy.postgresql.fullname" . }} -p 5432 -U {{ .Values.postgresql.auth.username }} -d {{ .Values.postgresql.auth.database }}; do
+                echo "waiting for postgresql"
+                sleep 2
+              done
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+        {{- end }}
+        # 3. assemble-config (must be last: cheap checks first, config assembly last)
+        - name: assemble-config
+          image: {{ include "dependaproxy.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              umask 077
+              out=/run/dependaproxy/config.yaml
+              : > "$out"
+              for f in /etc/dependaproxy/base/config.yaml /etc/dependaproxy/fragments/*/*.yaml; do
+                [ -f "$f" ] || continue
+                cat "$f" >> "$out"
+                printf '\n' >> "$out"
+              done
+              grep -q '^storage:' "$out" || { echo "FATAL: assembled config has no storage: block"; exit 1; }
+              grep -q '^auth:' "$out" || { echo "FATAL: assembled config has no auth: block"; exit 1; }
+              grep -q '^registries:' "$out" || { echo "FATAL: assembled config has no registries: block"; exit 1; }
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          volumeMounts:
+            - name: config-base
+              mountPath: /etc/dependaproxy/base
+              readOnly: true
+            - name: fragment-auth
+              mountPath: /etc/dependaproxy/fragments/10-auth
+              readOnly: true
+            - name: fragment-storage
+              mountPath: /etc/dependaproxy/fragments/20-storage
+              readOnly: true
+            {{- if .Values.config.registriesExistingSecret }}
+            - name: fragment-registries
+              mountPath: /etc/dependaproxy/fragments/30-registries
+              readOnly: true
+            {{- end }}
+            {{- range $i, $frag := .Values.extraConfigFragments }}
+            - name: fragment-extra-{{ $i }}
+              mountPath: /etc/dependaproxy/fragments/90-extra-{{ $i }}
+              readOnly: true
+            {{- end }}
+            - name: config
+              mountPath: /run/dependaproxy
+      containers:
+        - name: dependaproxy
+          image: {{ include "dependaproxy.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["-config", "/run/dependaproxy/config.yaml"]
+          ports:
+            - name: http
+              containerPort: {{ include "dependaproxy.containerPort" . }}
+              protocol: TCP
+          env:
+            - name: HOME
+              value: /home/dependaproxy
+            - name: TMPDIR
+              value: /tmp
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- with .Values.extraEnvFrom }}
+          envFrom:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            {{- toYaml .Values.livenessProbe | nindent 12 }}
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            {{- toYaml .Values.readinessProbe | nindent 12 }}
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            {{- toYaml .Values.startupProbe | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /run/dependaproxy
+              readOnly: true
+            - name: cache
+              mountPath: {{ .Values.cache.mountPath }}
+            - name: tmp
+              mountPath: /tmp
+            - name: home
+              mountPath: /home/dependaproxy
+            {{- if .Values.guarddog.writableVenv.enabled }}
+            - name: guarddog-venv
+              mountPath: {{ .Values.guarddog.writableVenv.path }}
+            {{- end }}
+      volumes:
+        - name: config-base
+          configMap:
+            name: {{ include "dependaproxy.fullname" . }}-config
+        - name: fragment-auth
+          secret:
+            secretName: {{ include "dependaproxy.auth.secretName" . }}
+            defaultMode: 0440
+            items:
+              - key: {{ include "dependaproxy.auth.secretKey" . }}
+                path: auth.yaml
+        - name: fragment-storage
+          secret:
+            secretName: {{ include "dependaproxy.storage.secretName" . }}
+            defaultMode: 0440
+            items:
+              - key: {{ include "dependaproxy.storage.secretKey" . }}
+                path: storage.yaml
+        {{- if .Values.config.registriesExistingSecret }}
+        - name: fragment-registries
+          secret:
+            secretName: {{ .Values.config.registriesExistingSecret }}
+            defaultMode: 0440
+            items:
+              - key: {{ .Values.config.registriesKey }}
+                path: registries.yaml
+        {{- end }}
+        {{- range $i, $frag := .Values.extraConfigFragments }}
+        - name: fragment-extra-{{ $i }}
+          secret:
+            secretName: {{ $frag.existingSecret }}
+            defaultMode: 0440
+            items:
+              - key: {{ $frag.key }}
+                path: {{ $frag.key }}
+        {{- end }}
+        - name: config
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Mi
+        - name: cache
+          {{- if .Values.persistence.cache.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "dependaproxy.cacheClaimName" . }}
+          {{- else }}
+          emptyDir:
+            sizeLimit: {{ .Values.cache.emptyDirSizeLimit }}
+          {{- end }}
+        - name: tmp
+          emptyDir:
+            sizeLimit: {{ .Values.tmp.sizeLimit }}
+        - name: home
+          emptyDir:
+            sizeLimit: {{ .Values.home.sizeLimit }}
+        {{- if .Values.guarddog.writableVenv.enabled }}
+        - name: guarddog-venv
+          emptyDir:
+            sizeLimit: {{ .Values.guarddog.writableVenv.sizeLimit }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}

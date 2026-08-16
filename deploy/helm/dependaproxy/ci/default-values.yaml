@@ -1,0 +1,6 @@
+# Baseline lint/template fixture: external auth + storage Secrets, bundled
+# postgresql disabled, default registries block.
+auth:
+  existingSecret: dependaproxy-auth
+storage:
+  existingSecret: dependaproxy-storage

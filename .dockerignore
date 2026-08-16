@@ -12,3 +12,5 @@ web/playwright-report
 web/test-results
 web/coverage
 web/*.tsbuildinfo
+# Helm chart source — not part of the image build context.
+deploy

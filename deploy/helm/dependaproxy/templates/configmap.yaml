@@ -1,0 +1,28 @@
+{{- include "dependaproxy.validate" . -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "dependaproxy.fullname" . }}-config
+  labels:
+    {{- include "dependaproxy.labels" . | nindent 4 }}
+data:
+  config.yaml: |
+    # Rendered by the dependaproxy Helm chart. This is the BASE fragment only --
+    # it is intentionally INVALID on its own (no auth:, no storage:). The
+    # assemble-config init container concatenates it with the Secret-sourced
+    # auth:/storage:/registries:/... fragments into /run/dependaproxy/config.yaml.
+    server:
+      addr: {{ .Values.config.server.addr | quote }}
+    {{- with .Values.config.log }}
+    log:
+      {{- with .level }}
+      level: {{ . | quote }}
+      {{- end }}
+      {{- with .format }}
+      format: {{ . | quote }}
+      {{- end }}
+    {{- end }}
+    {{- if not .Values.config.registriesExistingSecret }}
+    registries:
+      {{- toYaml .Values.config.registries | nindent 6 }}
+    {{- end }}

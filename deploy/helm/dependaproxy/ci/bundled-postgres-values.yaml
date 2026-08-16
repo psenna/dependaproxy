@@ -1,0 +1,6 @@
+# Exercises the bundled DEV/DEMO-ONLY PostgreSQL path: storage.existingSecret
+# stays empty and the chart generates its own storage Secret instead.
+auth:
+  existingSecret: dependaproxy-auth
+postgresql:
+  enabled: true

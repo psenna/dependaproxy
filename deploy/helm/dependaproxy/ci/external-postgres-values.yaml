@@ -1,0 +1,10 @@
+# Exercises non-default Secret names/keys for both auth and storage, with the
+# bundled postgresql explicitly disabled (external/managed PostgreSQL).
+auth:
+  existingSecret: my-auth
+  key: creds.yaml
+storage:
+  existingSecret: my-pg
+  key: dsn.yaml
+postgresql:
+  enabled: false

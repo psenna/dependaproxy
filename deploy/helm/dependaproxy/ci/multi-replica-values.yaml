@@ -1,0 +1,9 @@
+# Default fixture plus 3 replicas with the cache PVC left disabled/emptyDir
+# (proves the happy path: the replica/access-mode guard must NOT fire when
+# persistence.cache.enabled=false).
+auth:
+  existingSecret: dependaproxy-auth
+storage:
+  existingSecret: dependaproxy-storage
+
+replicaCount: 3
