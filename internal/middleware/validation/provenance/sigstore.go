@@ -2,6 +2,7 @@ package provenance
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -57,17 +58,30 @@ func newSigstoreVerifier(pr Params) Verifier {
 }
 
 // Verify verifies a raw sigstore bundle document (protobuf-JSON) against the
-// public-good trust root. Returns:
+// public-good trust root AND binds it to artifactSha256Hex (H3): the bundle's
+// DSSE envelope must carry an in-toto subject digest equal to the artifact
+// actually being served, not merely be an otherwise-valid signature over some
+// document. Returns:
 //
-//	(true, nil)   authentic provenance
+//	(true, nil)   authentic provenance for this exact artifact
 //	(false, nil)  bundle invalid/tampered (bad signature, unknown/expired
 //	              signing certificate, SAN mismatch, missing CT/tlog,
-//	              malformed bundle JSON)
+//	              malformed bundle JSON) OR authentic but for a different
+//	              artifact (subject digest mismatch)
 //	(false, err)  verification infrastructure failed (trust root unavailable)
-func (s *sigstoreVerifier) Verify(ctx context.Context, raw []byte) (bool, error) {
+func (s *sigstoreVerifier) Verify(ctx context.Context, raw []byte, artifactSha256Hex string) (bool, error) {
 	sev, err := s.engine(ctx)
 	if err != nil {
 		return false, err
+	}
+
+	digest, err := hex.DecodeString(artifactSha256Hex)
+	if err != nil {
+		// The digest is computed internally by hash.Sha256Hex and passed
+		// through PipelineContext.Metadata, never client-controlled, so a
+		// malformed hex string here is a programming error, not a tamper
+		// signal from an attacker-controlled input.
+		return false, fmt.Errorf("%w: malformed artifact digest: %v", errInfrastructure, err)
 	}
 
 	var b bundle.Bundle
@@ -94,13 +108,14 @@ func (s *sigstoreVerifier) Verify(ctx context.Context, raw []byte) (bool, error)
 		policyOpts = append(policyOpts, verify.WithoutIdentitiesUnsafe())
 	}
 
-	// v1 verifies the attestation bundle as a signed entity WITHOUT asserting
-	// an artifact digest: an in-toto provenance statement carries the artifact
-	// subjects inside the statement, and we do not (yet) cross-check them
-	// against the served tarball.
-	if _, err := sev.Verify(&b, verify.NewPolicy(verify.WithoutArtifactUnsafe(), policyOpts...)); err != nil {
+	// WithArtifactDigest asserts the DSSE envelope's in-toto statement subject
+	// digest equals artifactSha256Hex — this is what closes H3: a bundle whose
+	// subject is a different file (or a different version) fails here even
+	// though its signature is otherwise perfectly valid.
+	if _, err := sev.Verify(&b, verify.NewPolicy(verify.WithArtifactDigest("sha256", digest), policyOpts...)); err != nil {
 		// Any verification failure (bad signature, expired cert, missing
-		// CT/tlog) means the bundle is not authentic -> tamper signal.
+		// CT/tlog, OR a digest mismatch) means the bundle does not authenticate
+		// this artifact -> tamper signal.
 		return false, nil
 	}
 	return true, nil

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/psenna/dependaproxy/internal/pipeline"
@@ -25,9 +26,18 @@ func (f *fakeSource) Attestations(_ *pipeline.PipelineContext) ([][]byte, error)
 //	[]byte("VALID")    -> (true, nil)
 //	[]byte("TAMPERED") -> (false, nil)
 //	[]byte("INFRA")    -> (false, errInfrastructure)
-type fakeVerifier struct{}
+//
+// It also records the last artifactSha256Hex it was called with, so tests can
+// assert the digest reaching the verifier (H3).
+type fakeVerifier struct {
+	mu     sync.Mutex
+	digest string
+}
 
-func (fakeVerifier) Verify(_ context.Context, b []byte) (bool, error) {
+func (f *fakeVerifier) Verify(_ context.Context, b []byte, artifactSha256Hex string) (bool, error) {
+	f.mu.Lock()
+	f.digest = artifactSha256Hex
+	f.mu.Unlock()
 	switch string(b) {
 	case "VALID":
 		return true, nil
@@ -40,12 +50,25 @@ func (fakeVerifier) Verify(_ context.Context, b []byte) (bool, error) {
 	}
 }
 
+func (f *fakeVerifier) lastDigest() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.digest
+}
+
+// testDigest is the artifact sha256 hex stashed on the context by newCtx,
+// standing in for what an adapter's serveUntrusted would have set before
+// running the validation chain.
+const testDigest = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+
 func newCtx() *pipeline.PipelineContext {
-	return pipeline.NewPipelineContext(context.Background(), nil, "npm", "pkg", "1.0.0", "")
+	ctx := pipeline.NewPipelineContext(context.Background(), nil, "npm", "pkg", "1.0.0", "")
+	ctx.Metadata["sha256"] = testDigest
+	return ctx
 }
 
 func buildMw(pr Params, src Source) *Middleware {
-	return New(pr, src, fakeVerifier{})
+	return New(pr, src, &fakeVerifier{})
 }
 
 func TestValidateValidBundlePasses(t *testing.T) {
@@ -149,6 +172,41 @@ func TestValidateFirstValidBundleWins(t *testing.T) {
 	mw = buildMw(Params{}, &fakeSource{bundles: [][]byte{[]byte("TAMPERED"), []byte("TAMPERED")}})
 	if err := mw.Validate(newCtx()); err == nil {
 		t.Fatal("all-invalid bundles should deny")
+	}
+}
+
+// TestValidatePassesArtifactDigestToVerifier is the regression test for H3:
+// the digest Validate hands to the verifier must be the one stashed on the
+// context (the actual served artifact's sha256), not derived from the bundle
+// content or omitted.
+func TestValidatePassesArtifactDigestToVerifier(t *testing.T) {
+	v := &fakeVerifier{}
+	mw := New(Params{}, &fakeSource{bundles: [][]byte{[]byte("VALID")}}, v)
+	if err := mw.Validate(newCtx()); err != nil {
+		t.Fatalf("valid bundle should pass, got %v", err)
+	}
+	if got := v.lastDigest(); got != testDigest {
+		t.Errorf("verifier received digest %q, want %q", got, testDigest)
+	}
+}
+
+// TestValidateMissingDigestRoutesThroughOnError is the regression test for
+// the defensive half of H3: Validate must not call the verifier at all (and
+// so cannot accidentally verify without binding to an artifact) when no
+// digest is available on the context -- it treats that as an infrastructure
+// error, routed through on_error like any other.
+func TestValidateMissingDigestRoutesThroughOnError(t *testing.T) {
+	ctxNoDigest := pipeline.NewPipelineContext(context.Background(), nil, "npm", "pkg", "1.0.0", "")
+	// deliberately do not set ctx.Metadata["sha256"]
+
+	mw := buildMw(Params{}, &fakeSource{bundles: [][]byte{[]byte("VALID")}})
+	if err := mw.Validate(ctxNoDigest); err != nil {
+		t.Fatalf("missing digest in fail_open mode should serve, got %v", err)
+	}
+
+	mw = New(Params{OnError: onErrorFailClosed}, &fakeSource{bundles: [][]byte{[]byte("VALID")}}, &fakeVerifier{})
+	if err := mw.Validate(pipeline.NewPipelineContext(context.Background(), nil, "npm", "pkg", "1.0.0", "")); err == nil {
+		t.Fatal("missing digest in fail_closed mode should reject")
 	}
 }
 

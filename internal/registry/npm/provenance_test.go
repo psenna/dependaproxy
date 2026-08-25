@@ -9,10 +9,12 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/psenna/dependaproxy/internal/config"
+	"github.com/psenna/dependaproxy/internal/hash"
 	"github.com/psenna/dependaproxy/internal/middleware/mutation"
 	"github.com/psenna/dependaproxy/internal/middleware/retrieval/localcache"
 	"github.com/psenna/dependaproxy/internal/middleware/validation/provenance"
@@ -22,11 +24,25 @@ import (
 )
 
 // contentVerifier is the adapter-test fake: it passes bundles whose payload
-// contains "VALID" and rejects everything else (tampered).
-type contentVerifier struct{}
+// contains "VALID" and rejects everything else (tampered). It also records
+// the last artifactSha256Hex it was called with, so tests can assert the
+// digest reaching the verifier is the real served-artifact hash (H3).
+type contentVerifier struct {
+	mu     sync.Mutex
+	digest string
+}
 
-func (contentVerifier) Verify(_ context.Context, b []byte) (bool, error) {
+func (c *contentVerifier) Verify(_ context.Context, b []byte, artifactSha256Hex string) (bool, error) {
+	c.mu.Lock()
+	c.digest = artifactSha256Hex
+	c.mu.Unlock()
 	return bytes.Contains(b, []byte("VALID")), nil
+}
+
+func (c *contentVerifier) lastDigest() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.digest
 }
 
 const (
@@ -57,8 +73,9 @@ func npmProvenanceUpstream(t *testing.T, attBody string) *httptest.Server {
 }
 
 // newProvenanceAdapter wires the npm pipeline with provenance-verify whose
-// verifier is the contentVerifier fake (no real sigstore / no network).
-func newProvenanceAdapter(t *testing.T, srv *httptest.Server, params string) (*npmAdapter, *memStore) {
+// verifier is the contentVerifier fake (no real sigstore / no network). It
+// returns the verifier too, so tests can inspect what it was called with.
+func newProvenanceAdapter(t *testing.T, srv *httptest.Server, params string) (*npmAdapter, *memStore, *contentVerifier) {
 	t.Helper()
 	dir := t.TempDir()
 	store := newMemStore()
@@ -66,6 +83,7 @@ func newProvenanceAdapter(t *testing.T, srv *httptest.Server, params string) (*n
 	if err != nil {
 		t.Fatal(err)
 	}
+	cv := &contentVerifier{}
 
 	reg := pipeline.NewRegistry()
 	reg.RegisterValidation("min-publication-age", MinPubFactory)
@@ -76,7 +94,7 @@ func newProvenanceAdapter(t *testing.T, srv *httptest.Server, params string) (*n
 				return nil, fmt.Errorf("provenance-verify: decode params: %w", err)
 			}
 		}
-		return provenance.New(pr, NewProvenanceSource(client), contentVerifier{}), nil
+		return provenance.New(pr, NewProvenanceSource(client), cv), nil
 	})
 	reg.RegisterRetrieval("local-disk-cache", localcache.Factory)
 	reg.RegisterRetrieval("upstream-registry", UpstreamFactory(client))
@@ -115,7 +133,7 @@ func newProvenanceAdapter(t *testing.T, srv *httptest.Server, params string) (*n
 		logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
 		now:      func() time.Time { return time.Now().UTC() },
 	}
-	return a, store
+	return a, store, cv
 }
 
 func npmProvenanceMeta(t *testing.T, store *memStore) map[string]any {
@@ -138,7 +156,7 @@ func npmProvenanceMeta(t *testing.T, store *memStore) map[string]any {
 
 func TestNpmProvenanceVerifyValidServes(t *testing.T) {
 	srv := npmProvenanceUpstream(t, npmValidAtt)
-	a, _ := newProvenanceAdapter(t, srv, "") // mode deny (default)
+	a, _, _ := newProvenanceAdapter(t, srv, "") // mode deny (default)
 	s := newTestServer(t, a)
 	code, body := fetchViaProxy(t, s.URL+"/npm", "testpkg", "1.0.0")
 	if code != 200 || string(body) != "TARBALL" {
@@ -148,7 +166,7 @@ func TestNpmProvenanceVerifyValidServes(t *testing.T) {
 
 func TestNpmProvenanceVerifyTamperedDenies(t *testing.T) {
 	srv := npmProvenanceUpstream(t, npmTamperedAtt)
-	a, _ := newProvenanceAdapter(t, srv, "")
+	a, _, _ := newProvenanceAdapter(t, srv, "")
 	s := newTestServer(t, a)
 	code, _ := fetchViaProxy(t, s.URL+"/npm", "testpkg", "1.0.0")
 	if code != http.StatusForbidden {
@@ -158,7 +176,7 @@ func TestNpmProvenanceVerifyTamperedDenies(t *testing.T) {
 
 func TestNpmProvenanceVerifyTamperedWarns(t *testing.T) {
 	srv := npmProvenanceUpstream(t, npmTamperedAtt)
-	a, store := newProvenanceAdapter(t, srv, "mode: warn")
+	a, store, _ := newProvenanceAdapter(t, srv, "mode: warn")
 	s := newTestServer(t, a)
 	code, body := fetchViaProxy(t, s.URL+"/npm", "testpkg", "1.0.0")
 	if code != 200 || string(body) != "TARBALL" {
@@ -173,7 +191,7 @@ func TestNpmProvenanceVerifyTamperedWarns(t *testing.T) {
 
 func TestNpmProvenanceVerifyAbsentNotRequiredServes(t *testing.T) {
 	srv := npmProvenanceUpstream(t, npmEmptyAtt)
-	a, _ := newProvenanceAdapter(t, srv, "")
+	a, _, _ := newProvenanceAdapter(t, srv, "")
 	s := newTestServer(t, a)
 	code, body := fetchViaProxy(t, s.URL+"/npm", "testpkg", "1.0.0")
 	if code != 200 || string(body) != "TARBALL" {
@@ -183,7 +201,7 @@ func TestNpmProvenanceVerifyAbsentNotRequiredServes(t *testing.T) {
 
 func TestNpmProvenanceVerifyAbsentRequiredDenies(t *testing.T) {
 	srv := npmProvenanceUpstream(t, npmEmptyAtt)
-	a, _ := newProvenanceAdapter(t, srv, "require_provenance: true")
+	a, _, _ := newProvenanceAdapter(t, srv, "require_provenance: true")
 	s := newTestServer(t, a)
 	code, _ := fetchViaProxy(t, s.URL+"/npm", "testpkg", "1.0.0")
 	if code != http.StatusForbidden {
@@ -191,9 +209,30 @@ func TestNpmProvenanceVerifyAbsentRequiredDenies(t *testing.T) {
 	}
 }
 
+// TestNpmProvenanceVerifyBindsArtifactDigest is the regression test for H3:
+// the digest the verifier receives must be the sha256 of the bytes actually
+// served (the real "TARBALL" tarball), proving the wiring from serveUntrusted
+// through to the verifier is intact end to end.
+func TestNpmProvenanceVerifyBindsArtifactDigest(t *testing.T) {
+	srv := npmProvenanceUpstream(t, npmValidAtt)
+	a, _, cv := newProvenanceAdapter(t, srv, "")
+	s := newTestServer(t, a)
+	code, body := fetchViaProxy(t, s.URL+"/npm", "testpkg", "1.0.0")
+	if code != 200 || string(body) != "TARBALL" {
+		t.Fatalf("code=%d body=%q want 200/TARBALL", code, body)
+	}
+	want, _, err := hash.Sha256Hex(bytes.NewReader([]byte("TARBALL")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cv.lastDigest(); got != want {
+		t.Errorf("verifier received digest %q, want %q (the real served artifact's sha256)", got, want)
+	}
+}
+
 func TestNpmProvenanceVerifyAbsentRequiredWarns(t *testing.T) {
 	srv := npmProvenanceUpstream(t, npmEmptyAtt)
-	a, store := newProvenanceAdapter(t, srv, "mode: warn\nrequire_provenance: true")
+	a, store, _ := newProvenanceAdapter(t, srv, "mode: warn\nrequire_provenance: true")
 	s := newTestServer(t, a)
 	code, body := fetchViaProxy(t, s.URL+"/npm", "testpkg", "1.0.0")
 	if code != 200 || string(body) != "TARBALL" {
