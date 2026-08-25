@@ -49,7 +49,7 @@ func TestPypiStorageRoundTrip(t *testing.T) {
 	if err := st.Put(ctx, rec); err != nil {
 		t.Fatalf("put: %v", err)
 	}
-	got, err := st.Get(ctx, rec.Name, rec.Version, rec.Filename)
+	got, err := st.Get(ctx, rec.ProjectKey, rec.Name, rec.Version, rec.Filename)
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
@@ -63,7 +63,7 @@ func TestPypiStorageRoundTrip(t *testing.T) {
 
 func TestPypiStorageGetMissing(t *testing.T) {
 	st := openPypiStorage(t)
-	_, err := st.Get(context.Background(), "nope", "1.0.0", "f.whl")
+	_, err := st.Get(context.Background(), "", "nope", "1.0.0", "f.whl")
 	if err != ErrNotFound {
 		t.Fatalf("err = %v want ErrNotFound", err)
 	}
@@ -80,9 +80,51 @@ func TestPypiStorageUpsert(t *testing.T) {
 	if err := st.Put(ctx, rec); err != nil {
 		t.Fatal(err)
 	}
-	got, err := st.Get(ctx, rec.Name, rec.Version, rec.Filename)
+	got, err := st.Get(ctx, rec.ProjectKey, rec.Name, rec.Version, rec.Filename)
 	if err != nil || got.Sha256 != "bbb" {
 		t.Fatalf("upsert: got %+v err %v", got, err)
+	}
+}
+
+// TestPypiStorageScopedByProject is the regression test for the storage half
+// of H2: two different projects' records for the identical (name, version,
+// filename) must be independent -- neither Get nor Put may cross project
+// scope.
+func TestPypiStorageScopedByProject(t *testing.T) {
+	st := openPypiStorage(t)
+	ctx := context.Background()
+	base := Record{Name: "scoped", Version: "1", Filename: "scoped-1-py3-none-any.whl", FileType: "wheel", ValidatedAt: time.Now().UTC()}
+
+	projA := base
+	projA.ProjectKey, projA.Sha256 = "proj-a", "sha-a"
+	if err := st.Put(ctx, projA); err != nil {
+		t.Fatal(err)
+	}
+	projB := base
+	projB.ProjectKey, projB.Sha256 = "proj-b", "sha-b"
+	if err := st.Put(ctx, projB); err != nil {
+		t.Fatal(err)
+	}
+	unscoped := base
+	unscoped.Sha256 = "sha-unscoped"
+	if err := st.Put(ctx, unscoped); err != nil {
+		t.Fatal(err)
+	}
+
+	gotA, err := st.Get(ctx, "proj-a", base.Name, base.Version, base.Filename)
+	if err != nil || gotA.Sha256 != "sha-a" {
+		t.Fatalf("proj-a: got %+v err %v", gotA, err)
+	}
+	gotB, err := st.Get(ctx, "proj-b", base.Name, base.Version, base.Filename)
+	if err != nil || gotB.Sha256 != "sha-b" {
+		t.Fatalf("proj-b: got %+v err %v", gotB, err)
+	}
+	gotDefault, err := st.Get(ctx, "", base.Name, base.Version, base.Filename)
+	if err != nil || gotDefault.Sha256 != "sha-unscoped" {
+		t.Fatalf("default scope: got %+v err %v", gotDefault, err)
+	}
+	if _, err := st.Get(ctx, "proj-c", base.Name, base.Version, base.Filename); err != ErrNotFound {
+		t.Fatalf("proj-c (never written): err = %v want ErrNotFound", err)
 	}
 }
 

@@ -122,7 +122,7 @@ func npmProvenanceMeta(t *testing.T, store *memStore) map[string]any {
 	t.Helper()
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	rec, ok := store.recs[k("testpkg", "1.0.0")]
+	rec, ok := store.recs[k("", "testpkg", "1.0.0")]
 	if !ok {
 		t.Fatal("no stored record")
 	}

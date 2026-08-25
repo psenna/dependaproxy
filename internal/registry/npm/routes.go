@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/psenna/dependaproxy/internal/denylist"
 	"github.com/psenna/dependaproxy/internal/hash"
 	"github.com/psenna/dependaproxy/internal/pipeline"
 	"github.com/psenna/dependaproxy/internal/project"
@@ -101,7 +102,7 @@ func (a *npmAdapter) handleTarball(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, r, http.StatusInternalServerError, "mutation prefetch", err)
 		return
 	}
-	rec, err := a.storage.Get(ctx.Ctx, pkg, version)
+	rec, err := a.storage.Get(ctx.Ctx, ctx.ProjectKey, pkg, version)
 	if err == nil {
 		a.serveTrusted(w, r, ctx, rp, rec)
 		return
@@ -122,6 +123,21 @@ func (a *npmAdapter) serveTrusted(w http.ResponseWriter, r *http.Request, ctx *p
 	body, ok := a.verifyOrEvict(w, r, ctx, rp, rec.ValidationHash, body)
 	if !ok {
 		return
+	}
+	// Security boundary (H2): a trust-store hit proves only that this exact
+	// (project, name, version) passed validation once before -- it does not
+	// re-run guarddog/malware/provenance-verify. Re-run the deny-list gate
+	// specifically, so a denial recorded after that validation (an operator
+	// denylisting this exact sha256, or the deny-list rule wired to a newly-
+	// published CVE) is not permanently bypassed by the cache.
+	if dl, ok := rp.Validation.Find(denylist.Name); ok {
+		ctx.Metadata["sha256"] = rec.ValidationHash
+		err := dl.Validate(ctx)
+		delete(ctx.Metadata, "sha256") // keep the persisted metadata blob byte-identical
+		if err != nil {
+			a.fail(w, r, http.StatusForbidden, "validation rejected", err)
+			return
+		}
 	}
 	if err := rp.Mutation.RunPostFetch(ctx); err != nil {
 		a.fail(w, r, http.StatusInternalServerError, "mutation postfetch", err)
@@ -155,6 +171,7 @@ func (a *npmAdapter) serveUntrusted(w http.ResponseWriter, r *http.Request, ctx 
 	h, _ = ctx.Sha256FromMetadata()
 	delete(ctx.Metadata, "sha256") // keep the persisted metadata blob byte-identical
 	rec := Record{
+		ProjectKey:     ctx.ProjectKey,
 		Name:           pkg,
 		Version:        version,
 		ValidationHash: h,

@@ -213,6 +213,42 @@ func TestDenylistProjectScoping(t *testing.T) {
 	}
 }
 
+// TestDenylistBlocksTrustedCacheHit is the regression test for the H2
+// deny-list half: a trust-store hit must not bypass a denial recorded after
+// the artifact was originally validated. Without serveTrusted re-running
+// deny-list-check, this request would be served straight from the cache with
+// no validation at all.
+func TestDenylistBlocksTrustedCacheHit(t *testing.T) {
+	dir := t.TempDir()
+	tarball := []byte("TARBALL")
+	sha, _, err := hash.Sha256Hex(bytes.NewReader(tarball))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	store := newMemStore()
+	store.recs[k("", "testpkg", "1.0.0")] = Record{Name: "testpkg", Version: "1.0.0", ValidationHash: sha, ValidatedAt: time.Now().UTC()}
+
+	deny := newFakeDenyStore()
+	// Seeded as if the operator denylisted this exact sha256 *after* it was
+	// originally validated and stored -- the scenario the trust store alone
+	// cannot protect against.
+	deny.seed("npm", "testpkg", "1.0.0", sha, "", "denied after validation")
+
+	pack, raw := buildPack(time.Now().AddDate(0, 0, -30), tarball)
+	client := &rawClient{pack: pack, raw: raw, tarball: tarball}
+	a := newDenylistTestAdapter(t, dir, client, store, deny, func() time.Time { return time.Now().UTC() })
+	srv := newTestServer(t, a)
+
+	code, body := fetchViaProxy(t, srv.URL+"/npm", "testpkg", "1.0.0")
+	if code != 403 {
+		t.Fatalf("code=%d want 403 (trusted cache hit must re-check deny-list)", code)
+	}
+	if !bytes.Contains(body, []byte("denied after validation")) {
+		t.Errorf("body = %q, want the stored denial reason", body)
+	}
+}
+
 // TestDenylistWiringStructural asserts the resolver applied the hooks: every
 // Resolve (here the projectless default) yields a validation chain that starts
 // with deny-list-check and carries a non-nil OnFailure recorder.

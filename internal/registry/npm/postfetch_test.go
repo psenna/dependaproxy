@@ -38,7 +38,7 @@ func TestNpmServeUntrustedHonorsPostFetchBytes(t *testing.T) {
 		t.Fatalf("code=%d body=%q want 200/MUTATED", code, body)
 	}
 	want, _, _ := hash.Sha256Hex(bytes.NewReader([]byte("UPSTREAM")))
-	if got := store.recs[k("testpkg", "1.0.0")].ValidationHash; got != want {
+	if got := store.recs[k("", "testpkg", "1.0.0")].ValidationHash; got != want {
 		t.Errorf("stored ValidationHash = %q, want sha256(UPSTREAM)=%q", got, want)
 	}
 }
@@ -47,7 +47,7 @@ func TestNpmServeTrustedHonorsPostFetchBytes(t *testing.T) {
 	dir := t.TempDir()
 	store := newMemStore()
 	goodHash, _, _ := hash.Sha256Hex(bytes.NewReader([]byte("UPSTREAM")))
-	store.recs[k("testpkg", "1.0.0")] = Record{Name: "testpkg", Version: "1.0.0", ValidationHash: goodHash, ValidatedAt: time.Now().UTC()}
+	store.recs[k("", "testpkg", "1.0.0")] = Record{Name: "testpkg", Version: "1.0.0", ValidationHash: goodHash, ValidatedAt: time.Now().UTC()}
 	pack, raw := buildPack(time.Now().AddDate(0, 0, -30), []byte("UPSTREAM"))
 	client := &rawClient{pack: pack, raw: raw, tarball: []byte("UPSTREAM")}
 	global := &project.Resolved{Mutation: pipeline.MutationPipeline{Chain: []pipeline.MutationMiddleware{sentinelMutation{}}}}
@@ -61,7 +61,7 @@ func TestNpmServeTrustedHonorsPostFetchBytes(t *testing.T) {
 	// Trust-anchor invariant: the stored hash is of the UPSTREAM bytes, while
 	// the served body is the mutated bytes. The trusted path must not overwrite
 	// the stored hash.
-	if got := store.recs[k("testpkg", "1.0.0")].ValidationHash; got != goodHash {
+	if got := store.recs[k("", "testpkg", "1.0.0")].ValidationHash; got != goodHash {
 		t.Errorf("stored ValidationHash = %q, want sha256(UPSTREAM)=%q (trusted path must not rehash mutated bytes)", got, goodHash)
 	}
 }
