@@ -10,23 +10,21 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"regexp"
 	"time"
 
 	"github.com/psenna/dependaproxy/internal/config"
+	"github.com/psenna/dependaproxy/internal/pipeline"
 	"github.com/psenna/dependaproxy/internal/project"
 	"gopkg.in/yaml.v3"
 )
 
-// keyRe matches the project-key characters allowed in URL path segments. The
-// lone key "-" is additionally rejected below because the project-path parser
-// (pipeline.ParseProjectPath) treats "-" as "not a project scope".
-var keyRe = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
-
-// validKey reports whether key is a usable project key: non-empty, matches
-// keyRe, and is not the reserved "-" segment.
+// validKey reports whether key is a usable project key. Delegates to
+// pipeline.ValidProjectKey so the admin API and the request-URL parser
+// (pipeline.ParseProjectPath) agree on exactly which strings are ever treated
+// as a project scope (H5) -- a key this rejects can never be created, so it
+// can never legitimately appear in a URL either.
 func validKey(key string) bool {
-	return key != "" && key != "-" && keyRe.MatchString(key)
+	return pipeline.ValidProjectKey(key)
 }
 
 // Invalidator drops a project's cached pipelines across all registries.

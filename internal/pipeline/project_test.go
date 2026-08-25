@@ -1,6 +1,13 @@
 package pipeline
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
+
+// longKey returns a valid-charset project key of exactly n bytes, for testing
+// the length bound in projectKeyRe.
+func longKey(n int) string { return strings.Repeat("a", n) }
 
 // TestParseProjectPath covers the project-scoping rules for registry-relative
 // paths:
@@ -41,6 +48,17 @@ func TestParseProjectPath(t *testing.T) {
 		// Default (non-project) PyPI paths pass through untouched.
 		{name: "default pypi index", path: "/simple/testpkg/", wantRemaining: "/simple/testpkg/", wantProjectKey: ""},
 		{name: "default pypi file", path: "/files/t/1.0.0/x.whl", wantRemaining: "/files/t/1.0.0/x.whl", wantProjectKey: ""},
+		// H5: a key outside the admin API's accepted charset can never
+		// correspond to a real project, so it must not be treated as a project
+		// scope at all -- it falls through to the default path instead of
+		// reaching the resolver (and its cache) as a garbage key.
+		{name: "key with disallowed characters", path: "/p/my@proj/lodash", wantRemaining: "/p/my@proj/lodash", wantProjectKey: ""},
+		{name: "key with space", path: "/p/my proj/lodash", wantRemaining: "/p/my proj/lodash", wantProjectKey: ""},
+		{name: "key with percent character", path: "/p/a%2Fb/lodash", wantRemaining: "/p/a%2Fb/lodash", wantProjectKey: ""},
+		// H5: a key longer than the admin API would ever accept is rejected the
+		// same way -- it can never correspond to a real project either.
+		{name: "key over max length", path: "/p/" + longKey(129) + "/lodash", wantRemaining: "/p/" + longKey(129) + "/lodash", wantProjectKey: ""},
+		{name: "key at max length", path: "/p/" + longKey(128) + "/lodash", wantRemaining: "/lodash", wantProjectKey: longKey(128)},
 	}
 
 	for _, tt := range tests {
@@ -51,6 +69,33 @@ func TestParseProjectPath(t *testing.T) {
 			}
 			if gotKey != tt.wantProjectKey {
 				t.Errorf("ParseProjectPath(%q) key = %q, want %q", tt.path, gotKey, tt.wantProjectKey)
+			}
+		})
+	}
+}
+
+// TestValidProjectKey covers ValidProjectKey directly (H5): the same rule
+// ParseProjectPath and the admin API both defer to.
+func TestValidProjectKey(t *testing.T) {
+	tests := []struct {
+		key  string
+		want bool
+	}{
+		{"myproj", true},
+		{"my-proj_1.0", true},
+		{longKey(128), true},  // exactly at the cap
+		{longKey(129), false}, // one over the cap
+		{"", false},           // empty
+		{"-", false},          // reserved sentinel
+		{"my proj", false},    // space
+		{"my/proj", false},    // slash (can't occur as a single path segment anyway, but reject defensively)
+		{"my%2Fproj", false},  // percent
+		{"проект", false},     // non-ASCII
+	}
+	for _, tt := range tests {
+		t.Run(tt.key, func(t *testing.T) {
+			if got := ValidProjectKey(tt.key); got != tt.want {
+				t.Errorf("ValidProjectKey(%q) = %v, want %v", tt.key, got, tt.want)
 			}
 		})
 	}
