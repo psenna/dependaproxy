@@ -65,9 +65,15 @@ func (r *Resolver) applyHooks(v *pipeline.ValidationPipeline) {
 }
 
 // Resolve returns the pipelines for projectKey, building and caching them on
-// first use. An unknown key falls back to the global pipelines (also cached, so
-// the store is read at most once per key). The store read is cancelled when ctx
-// is done; a nil ctx is treated as context.Background().
+// first use. An unknown key falls back to the global pipelines; unlike a real
+// project, that fallback is deliberately NOT cached (H5) -- projectKey is
+// anything a client's request URL happens to carry, not something bounded by
+// what the operator created via the admin API, so caching a negative lookup
+// would let an unbounded stream of distinct never-created keys grow this
+// cache forever. The store read for an unknown key is a single cheap,
+// indexed lookup, so repeating it on every request for that key is fine. The
+// store read is cancelled when ctx is done; a nil ctx is treated as
+// context.Background().
 func (r *Resolver) Resolve(ctx context.Context, projectKey string) (*Resolved, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -77,8 +83,7 @@ func (r *Resolver) Resolve(ctx context.Context, projectKey string) (*Resolved, e
 	}
 	cfg, err := r.store.Get(ctx, projectKey)
 	if errors.Is(err, ErrProjectNotFound) {
-		actual, _ := r.cache.LoadOrStore(projectKey, r.global)
-		return actual.(*Resolved), nil
+		return r.global, nil
 	}
 	if err != nil {
 		return nil, err

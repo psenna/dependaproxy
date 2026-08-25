@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -166,7 +167,14 @@ func TestResolveDefaultNoDB(t *testing.T) {
 	}
 }
 
-func TestResolveUnknownFallsBackAndCaches(t *testing.T) {
+// TestResolveUnknownFallsBackWithoutCaching is the regression test for H5: a
+// negative lookup (an unknown/never-created project key) must NOT be cached.
+// Caching it would let an unbounded stream of distinct garbage keys -- any
+// string a client's request URL happens to carry, never anything the operator
+// created via the admin API -- grow the resolver's cache forever. Each
+// resolve of the same unknown key re-queries the store; the cost is one
+// cheap, indexed lookup per request, never unbounded memory growth.
+func TestResolveUnknownFallsBackWithoutCaching(t *testing.T) {
 	store, reg, global := newEnv(t)
 	r := project.NewResolver("npm", reg, store, global)
 
@@ -183,8 +191,33 @@ func TestResolveUnknownFallsBackAndCaches(t *testing.T) {
 	if _, err := r.Resolve(context.Background(), "nope"); err != nil {
 		t.Fatalf("resolve unknown again: %v", err)
 	}
-	if n := store.getCount(); n != 1 {
-		t.Errorf("store.Get calls after repeat = %d, want 1 (fallback cached)", n)
+	if n := store.getCount(); n != 2 {
+		t.Errorf("store.Get calls after repeat = %d, want 2 (negative lookups are never cached -- H5)", n)
+	}
+}
+
+// TestResolveManyUnknownKeysStayUncached drives many distinct never-created
+// project keys through Resolve and asserts none of them leave an entry in the
+// resolver's cache -- the direct proof that a flood of distinct garbage keys
+// (H5) cannot grow unbounded memory, regardless of how many distinct keys a
+// client sends.
+func TestResolveManyUnknownKeysStayUncached(t *testing.T) {
+	store, reg, global := newEnv(t)
+	r := project.NewResolver("npm", reg, store, global)
+
+	const n = 500
+	for i := 0; i < n; i++ {
+		key := "garbage-" + strconv.Itoa(i)
+		got, err := r.Resolve(context.Background(), key)
+		if err != nil {
+			t.Fatalf("resolve %q: %v", key, err)
+		}
+		if got != global {
+			t.Fatalf("resolve %q: got %v, want the global fallback", key, got)
+		}
+	}
+	if got := store.getCount(); got != n {
+		t.Fatalf("store.Get calls = %d, want %d (one per distinct unknown key, none cached)", got, n)
 	}
 }
 
