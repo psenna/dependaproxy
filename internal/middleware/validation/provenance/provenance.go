@@ -53,15 +53,20 @@ type Source interface {
 
 // Verifier verifies a single sigstore bundle document.
 type Verifier interface {
-	// Verify verifies a raw bundle.
+	// Verify verifies a raw bundle and binds it to artifactSha256Hex (H3): a
+	// bundle attesting to different bytes than the ones actually being served
+	// must not verify, even if the bundle itself is otherwise authentic (e.g.
+	// a PEP 740 attestation document that carries provenance for more than one
+	// file of the same project).
 	//
-	//   - (true, nil)   — the bundle is authentic (valid signature, identity,
-	//     CT/tlog, ...).
-	//   - (false, nil)  — the bundle is invalid/tampered: deny or warn, NOT
+	//   - (true, nil)   — the bundle is authentic AND its in-toto subject
+	//     digest matches artifactSha256Hex.
+	//   - (false, nil)  — the bundle is invalid/tampered, or its subject
+	//     digest does not match the served artifact: deny or warn, NOT
 	//     on_error.
 	//   - (false, err)  — verification infrastructure failed (trust root
 	//     unavailable, network outage, ...), routed through on_error.
-	Verify(ctx context.Context, bundle []byte) (valid bool, err error)
+	Verify(ctx context.Context, bundle []byte, artifactSha256Hex string) (valid bool, err error)
 }
 
 // Params is the decoded `params:` node for the provenance-verify middleware.
@@ -107,8 +112,17 @@ func (m *Middleware) Validate(ctx *pipeline.PipelineContext) error {
 		}
 		return nil
 	}
+	// H3: bind verification to the artifact actually being served. The sha256
+	// is stashed in ctx.Metadata by the adapter's serveUntrusted before the
+	// validation chain runs (the same value the deny-list check and the
+	// trust-store record use), so this is always the hash of ctx.Tarball.Bytes
+	// -- never a value the client can influence directly.
+	digest, ok := ctx.Sha256FromMetadata()
+	if !ok {
+		return m.applyError(ctx, fmt.Errorf("%s: artifact digest unavailable for verification", name))
+	}
 	for _, b := range bundles {
-		valid, verr := m.verifier.Verify(ctx.Ctx, b)
+		valid, verr := m.verifier.Verify(ctx.Ctx, b, digest)
 		if verr != nil {
 			return m.applyError(ctx, verr)
 		}

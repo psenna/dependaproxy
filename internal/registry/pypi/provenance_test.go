@@ -9,10 +9,12 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/psenna/dependaproxy/internal/config"
+	"github.com/psenna/dependaproxy/internal/hash"
 	"github.com/psenna/dependaproxy/internal/middleware/mutation"
 	"github.com/psenna/dependaproxy/internal/middleware/retrieval/localcache"
 	"github.com/psenna/dependaproxy/internal/middleware/validation/provenance"
@@ -21,12 +23,26 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// pypiContentVerifier is the adapter-test fake: it passes bundles whose payload
-// contains "VALID" and rejects everything else (tampered).
-type pypiContentVerifier struct{}
+// pypiContentVerifier is the adapter-test fake: it passes bundles whose
+// payload contains "VALID" and rejects everything else (tampered). It also
+// records the last artifactSha256Hex it was called with, so tests can assert
+// the digest reaching the verifier is the real served-artifact hash (H3).
+type pypiContentVerifier struct {
+	mu     sync.Mutex
+	digest string
+}
 
-func (pypiContentVerifier) Verify(_ context.Context, b []byte) (bool, error) {
+func (c *pypiContentVerifier) Verify(_ context.Context, b []byte, artifactSha256Hex string) (bool, error) {
+	c.mu.Lock()
+	c.digest = artifactSha256Hex
+	c.mu.Unlock()
 	return bytes.Contains(b, []byte("VALID")), nil
+}
+
+func (c *pypiContentVerifier) lastDigest() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.digest
 }
 
 const (
@@ -61,8 +77,9 @@ func pypiProvenanceUpstream(t *testing.T, attBody string) *httptest.Server {
 }
 
 // newProvenanceAdapter wires the pypi pipeline with provenance-verify whose
-// verifier is the contentVerifier fake (no real sigstore / no network).
-func newProvenanceAdapter(t *testing.T, srv *httptest.Server, params string) (*pypiAdapter, *memStore) {
+// verifier is the contentVerifier fake (no real sigstore / no network). It
+// returns the verifier too, so tests can inspect what it was called with.
+func newProvenanceAdapter(t *testing.T, srv *httptest.Server, params string) (*pypiAdapter, *memStore, *pypiContentVerifier) {
 	t.Helper()
 	dir := t.TempDir()
 	store := newMemStore()
@@ -70,6 +87,7 @@ func newProvenanceAdapter(t *testing.T, srv *httptest.Server, params string) (*p
 	if err != nil {
 		t.Fatal(err)
 	}
+	cv := &pypiContentVerifier{}
 
 	reg := pipeline.NewRegistry()
 	reg.RegisterValidation("provenance-verify", func(p yaml.Node) (pipeline.ValidationMiddleware, error) {
@@ -79,7 +97,7 @@ func newProvenanceAdapter(t *testing.T, srv *httptest.Server, params string) (*p
 				return nil, fmt.Errorf("provenance-verify: decode params: %w", err)
 			}
 		}
-		return provenance.New(pr, NewProvenanceSource(client), pypiContentVerifier{}), nil
+		return provenance.New(pr, NewProvenanceSource(client), cv), nil
 	})
 	reg.RegisterRetrieval("local-disk-cache", localcache.Factory)
 	reg.RegisterRetrieval("upstream-registry", UpstreamFactory(client))
@@ -117,7 +135,7 @@ func newProvenanceAdapter(t *testing.T, srv *httptest.Server, params string) (*p
 		logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
 		now:      func() time.Time { return time.Now().UTC() },
 	}
-	return a, store
+	return a, store, cv
 }
 
 func pypiProvenanceMeta(t *testing.T, store *memStore) map[string]any {
@@ -140,7 +158,7 @@ func pypiProvenanceMeta(t *testing.T, store *memStore) map[string]any {
 
 func TestPypiProvenanceVerifyValidServes(t *testing.T) {
 	srv := pypiProvenanceUpstream(t, pypiValidAtt)
-	a, _ := newProvenanceAdapter(t, srv, "") // mode deny (default)
+	a, _, _ := newProvenanceAdapter(t, srv, "") // mode deny (default)
 	s := newTestServer(t, a)
 	code, body := fetchViaProxy(t, s.URL+"/pypi", "testpkg")
 	if code != 200 || string(body) != "WHEEL" {
@@ -150,7 +168,7 @@ func TestPypiProvenanceVerifyValidServes(t *testing.T) {
 
 func TestPypiProvenanceVerifyTamperedDenies(t *testing.T) {
 	srv := pypiProvenanceUpstream(t, pypiTamperedAtt)
-	a, _ := newProvenanceAdapter(t, srv, "")
+	a, _, _ := newProvenanceAdapter(t, srv, "")
 	s := newTestServer(t, a)
 	code, _ := fetchViaProxy(t, s.URL+"/pypi", "testpkg")
 	if code != http.StatusForbidden {
@@ -160,7 +178,7 @@ func TestPypiProvenanceVerifyTamperedDenies(t *testing.T) {
 
 func TestPypiProvenanceVerifyTamperedWarns(t *testing.T) {
 	srv := pypiProvenanceUpstream(t, pypiTamperedAtt)
-	a, store := newProvenanceAdapter(t, srv, "mode: warn")
+	a, store, _ := newProvenanceAdapter(t, srv, "mode: warn")
 	s := newTestServer(t, a)
 	code, body := fetchViaProxy(t, s.URL+"/pypi", "testpkg")
 	if code != 200 || string(body) != "WHEEL" {
@@ -175,7 +193,7 @@ func TestPypiProvenanceVerifyTamperedWarns(t *testing.T) {
 
 func TestPypiProvenanceVerifyAbsentNotRequiredServes(t *testing.T) {
 	srv := pypiProvenanceUpstream(t, pypiEmptyAtt)
-	a, _ := newProvenanceAdapter(t, srv, "")
+	a, _, _ := newProvenanceAdapter(t, srv, "")
 	s := newTestServer(t, a)
 	code, body := fetchViaProxy(t, s.URL+"/pypi", "testpkg")
 	if code != 200 || string(body) != "WHEEL" {
@@ -185,7 +203,7 @@ func TestPypiProvenanceVerifyAbsentNotRequiredServes(t *testing.T) {
 
 func TestPypiProvenanceVerifyAbsentRequiredDenies(t *testing.T) {
 	srv := pypiProvenanceUpstream(t, pypiEmptyAtt)
-	a, _ := newProvenanceAdapter(t, srv, "require_provenance: true")
+	a, _, _ := newProvenanceAdapter(t, srv, "require_provenance: true")
 	s := newTestServer(t, a)
 	code, _ := fetchViaProxy(t, s.URL+"/pypi", "testpkg")
 	if code != http.StatusForbidden {
@@ -193,9 +211,30 @@ func TestPypiProvenanceVerifyAbsentRequiredDenies(t *testing.T) {
 	}
 }
 
+// TestPypiProvenanceVerifyBindsArtifactDigest is the regression test for H3:
+// the digest the verifier receives must be the sha256 of the bytes actually
+// served (the real "WHEEL" file), proving the wiring from serveUntrusted
+// through to the verifier is intact end to end.
+func TestPypiProvenanceVerifyBindsArtifactDigest(t *testing.T) {
+	srv := pypiProvenanceUpstream(t, pypiValidAtt)
+	a, _, cv := newProvenanceAdapter(t, srv, "")
+	s := newTestServer(t, a)
+	code, body := fetchViaProxy(t, s.URL+"/pypi", "testpkg")
+	if code != 200 || string(body) != "WHEEL" {
+		t.Fatalf("code=%d body=%q want 200/WHEEL", code, body)
+	}
+	want, _, err := hash.Sha256Hex(bytes.NewReader([]byte("WHEEL")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cv.lastDigest(); got != want {
+		t.Errorf("verifier received digest %q, want %q (the real served artifact's sha256)", got, want)
+	}
+}
+
 func TestPypiProvenanceVerifyAbsentRequiredWarns(t *testing.T) {
 	srv := pypiProvenanceUpstream(t, pypiEmptyAtt)
-	a, store := newProvenanceAdapter(t, srv, "mode: warn\nrequire_provenance: true")
+	a, store, _ := newProvenanceAdapter(t, srv, "mode: warn\nrequire_provenance: true")
 	s := newTestServer(t, a)
 	code, body := fetchViaProxy(t, s.URL+"/pypi", "testpkg")
 	if code != 200 || string(body) != "WHEEL" {
