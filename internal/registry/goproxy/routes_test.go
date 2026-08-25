@@ -120,14 +120,16 @@ type memStore struct {
 	puts     int
 }
 
-func newMemStore() *memStore      { return &memStore{recs: map[string]Record{}} }
-func k(module, ver string) string { return module + "|" + ver }
+func newMemStore() *memStore { return &memStore{recs: map[string]Record{}} }
+func k(projectKey, module, ver string) string {
+	return projectKey + "|" + module + "|" + ver
+}
 
-func (m *memStore) Get(_ context.Context, module, ver string) (Record, error) {
+func (m *memStore) Get(_ context.Context, projectKey, module, ver string) (Record, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.accessed = true
-	r, ok := m.recs[k(module, ver)]
+	r, ok := m.recs[k(projectKey, module, ver)]
 	if !ok {
 		return Record{}, ErrNotFound
 	}
@@ -138,7 +140,7 @@ func (m *memStore) Put(_ context.Context, r Record) error {
 	defer m.mu.Unlock()
 	m.accessed = true
 	m.puts++
-	m.recs[k(r.ModulePath, r.Version)] = r
+	m.recs[k(r.ProjectKey, r.ModulePath, r.Version)] = r
 	return nil
 }
 
@@ -479,7 +481,7 @@ func TestGoproxyZipUntrustedValidatesStoresServes(t *testing.T) {
 		t.Fatalf("expected stored record, got %d", len(store.recs))
 	}
 	want, _, _ := hash.Sha256Hex(bytes.NewReader([]byte(testZipBody)))
-	if store.recs[k(testModule, testVersion)].ValidationHash != want {
+	if store.recs[k("", testModule, testVersion)].ValidationHash != want {
 		t.Error("stored hash mismatch")
 	}
 }
@@ -525,7 +527,7 @@ func TestGoproxyZipTrustedServedFromHash(t *testing.T) {
 func TestGoproxyZipTamperedRefetches(t *testing.T) {
 	store := newMemStore()
 	goodHash, _, _ := hash.Sha256Hex(bytes.NewReader([]byte(testZipBody)))
-	store.recs[k(testModule, testVersion)] = Record{ModulePath: testModule, Version: testVersion, ValidationHash: goodHash, ValidatedAt: time.Now().UTC()}
+	store.recs[k("", testModule, testVersion)] = Record{ModulePath: testModule, Version: testVersion, ValidationHash: goodHash, ValidatedAt: time.Now().UTC()}
 	client := &flipClient{fakeClient: *newFakeClient(), corrupt: []byte("CORRUPT")}
 	a := newTestAdapterWithStore(t, "/goproxy", client, store)
 	srv := newTestServer(t, a)
@@ -541,7 +543,7 @@ func TestGoproxyZipTamperedRefetches(t *testing.T) {
 
 func TestGoproxyZipPersistentMismatch502(t *testing.T) {
 	store := newMemStore()
-	store.recs[k(testModule, testVersion)] = Record{ModulePath: testModule, Version: testVersion, ValidationHash: "deadbeef", ValidatedAt: time.Now().UTC()}
+	store.recs[k("", testModule, testVersion)] = Record{ModulePath: testModule, Version: testVersion, ValidationHash: "deadbeef", ValidatedAt: time.Now().UTC()}
 	client := newFakeClient()
 	a := newTestAdapterWithStore(t, "/goproxy", client, store)
 	srv := newTestServer(t, a)

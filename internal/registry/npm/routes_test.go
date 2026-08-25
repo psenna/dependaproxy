@@ -32,13 +32,13 @@ type memStore struct {
 	recs map[string]Record
 }
 
-func newMemStore() *memStore    { return &memStore{recs: map[string]Record{}} }
-func k(name, ver string) string { return name + "|" + ver }
+func newMemStore() *memStore                { return &memStore{recs: map[string]Record{}} }
+func k(projectKey, name, ver string) string { return projectKey + "|" + name + "|" + ver }
 
-func (m *memStore) Get(_ context.Context, name, ver string) (Record, error) {
+func (m *memStore) Get(_ context.Context, projectKey, name, ver string) (Record, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	r, ok := m.recs[k(name, ver)]
+	r, ok := m.recs[k(projectKey, name, ver)]
 	if !ok {
 		return Record{}, ErrNotFound
 	}
@@ -47,7 +47,7 @@ func (m *memStore) Get(_ context.Context, name, ver string) (Record, error) {
 func (m *memStore) Put(_ context.Context, r Record) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.recs[k(r.Name, r.Version)] = r
+	m.recs[k(r.ProjectKey, r.Name, r.Version)] = r
 	return nil
 }
 
@@ -197,7 +197,7 @@ func TestNpmUntrustedValidatesStoresServes(t *testing.T) {
 		t.Fatalf("expected stored record, got %d", len(store.recs))
 	}
 	want, _, _ := hash.Sha256Hex(bytes.NewReader([]byte("TARBALL")))
-	if store.recs[k("testpkg", "1.0.0")].ValidationHash != want {
+	if store.recs[k("", "testpkg", "1.0.0")].ValidationHash != want {
 		t.Error("stored hash mismatch")
 	}
 }
@@ -243,7 +243,7 @@ func TestNpmUntrustedStashesSha256InMetadata(t *testing.T) {
 	}
 	// The stash must be removed before the record's metadata JSON is built, so
 	// the persisted metadata blob stays byte-identical to before this issue.
-	gotRec := store.recs[k("testpkg", "1.0.0")]
+	gotRec := store.recs[k("", "testpkg", "1.0.0")]
 	if bytes.Contains(gotRec.Metadata, []byte("sha256")) {
 		t.Errorf("stored record metadata contains %q, want it removed: %s", "sha256", gotRec.Metadata)
 	}
@@ -291,7 +291,7 @@ func TestNpmTamperedCacheRefetches(t *testing.T) {
 	tarball := []byte("GOOD")
 	goodHash, _, _ := hash.Sha256Hex(bytes.NewReader(tarball))
 	store := newMemStore()
-	store.recs[k("testpkg", "1.0.0")] = Record{Name: "testpkg", Version: "1.0.0", ValidationHash: goodHash, ValidatedAt: time.Now().UTC()}
+	store.recs[k("", "testpkg", "1.0.0")] = Record{Name: "testpkg", Version: "1.0.0", ValidationHash: goodHash, ValidatedAt: time.Now().UTC()}
 	pack, raw := buildPack(time.Now().AddDate(0, 0, -30), tarball)
 	client := &rawClient{pack: pack, raw: raw, tarball: tarball}
 	a := newTestAdapter(t, "/npm", dir, 0, client, store)
@@ -317,7 +317,7 @@ func TestNpmCorruptDBHash502(t *testing.T) {
 	dir := t.TempDir()
 	tarball := []byte("GOOD")
 	store := newMemStore()
-	store.recs[k("testpkg", "1.0.0")] = Record{Name: "testpkg", Version: "1.0.0", ValidationHash: "deadbeef", ValidatedAt: time.Now().UTC()}
+	store.recs[k("", "testpkg", "1.0.0")] = Record{Name: "testpkg", Version: "1.0.0", ValidationHash: "deadbeef", ValidatedAt: time.Now().UTC()}
 	pack, raw := buildPack(time.Now().AddDate(0, 0, -30), tarball)
 	client := &rawClient{pack: pack, raw: raw, tarball: tarball}
 	a := newTestAdapter(t, "/npm", dir, 0, client, store)

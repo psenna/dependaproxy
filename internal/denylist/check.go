@@ -9,8 +9,11 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// name is the config type string for the deny-list-check middleware.
-const name = "deny-list-check"
+// Name is the config type string for the deny-list-check middleware. Exported
+// so callers (e.g. a trusted-cache-hit path that wants to re-run just this
+// middleware) can find it in a resolved validation chain by name rather than
+// duplicating the string literal.
+const Name = "deny-list-check"
 
 // Params is the yaml-decoded configuration for the deny-list-check middleware.
 type Params struct {
@@ -30,7 +33,7 @@ type checkMiddleware struct {
 }
 
 // Name returns the config type string.
-func (*checkMiddleware) Name() string { return name }
+func (*checkMiddleware) Name() string { return Name }
 
 // Validate denies the package immediately when a denial is already recorded
 // for its exact scope. Matching is strict per project: the store blocks only
@@ -82,7 +85,7 @@ func Factory(s Store) pipeline.ValidationFactory {
 		var pr Params
 		if !p.IsZero() {
 			if err := p.Decode(&pr); err != nil {
-				return nil, fmt.Errorf("%s: decode params: %w", name, err)
+				return nil, fmt.Errorf("%s: decode params: %w", Name, err)
 			}
 		}
 		enabled := true

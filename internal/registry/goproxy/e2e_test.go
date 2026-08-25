@@ -310,7 +310,7 @@ func TestGoproxyE2ETrustFlowStoresAndServes(t *testing.T) {
 		t.Fatalf("store recs = %d want 1", len(store.recs))
 	}
 	wantHash, _, _ := hash.Sha256Hex(bytes.NewReader([]byte(testZipBody)))
-	if got := store.recs[k(testModule, testVersion)].ValidationHash; got != wantHash {
+	if got := store.recs[k("", testModule, testVersion)].ValidationHash; got != wantHash {
 		t.Errorf("stored hash = %q want %q", got, wantHash)
 	}
 
@@ -375,7 +375,7 @@ func TestGoproxyE2ETamperedCacheEvictsAndRefetches(t *testing.T) {
 func TestGoproxyE2EPersistentMismatch502(t *testing.T) {
 	up, _ := newUpstream(t)
 	store := newMemStore()
-	store.recs[k(testModule, testVersion)] = Record{ModulePath: testModule, Version: testVersion, ValidationHash: "deadbeef", ValidatedAt: time.Now().UTC()}
+	store.recs[k("", testModule, testVersion)] = Record{ModulePath: testModule, Version: testVersion, ValidationHash: "deadbeef", ValidatedAt: time.Now().UTC()}
 	srv := newTestServer(t, newE2EAdapter(t, "/goproxy", up.URL, store, t.TempDir(), nil))
 
 	code, _, body := get(t, goproxyZipURL(srv.URL))

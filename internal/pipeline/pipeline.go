@@ -123,6 +123,18 @@ type ValidationPipeline struct {
 	OnFailure func(ctx *PipelineContext, err error)
 }
 
+// Find returns the first middleware in the chain named name, or (nil, false).
+// Used by trusted-cache-hit paths that want to re-run a specific middleware
+// (e.g. deny-list-check) without running the full chain.
+func (p ValidationPipeline) Find(name string) (ValidationMiddleware, bool) {
+	for _, m := range p.Chain {
+		if m.Name() == name {
+			return m, true
+		}
+	}
+	return nil, false
+}
+
 // Run executes the validation chain in order.
 func (p ValidationPipeline) Run(ctx *PipelineContext) error {
 	for _, m := range p.Chain {

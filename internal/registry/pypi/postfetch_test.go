@@ -38,7 +38,7 @@ func TestPypiServeUntrustedHonorsPostFetchBytes(t *testing.T) {
 		t.Fatalf("code=%d body=%q want 200/MUTATED", code, body)
 	}
 	want, _, _ := hash.Sha256Hex(bytes.NewReader([]byte("UPSTREAM")))
-	if got := store.recs[pkey("testpkg", "1.0.0", wheelFile)].Sha256; got != want {
+	if got := store.recs[pkey("", "testpkg", "1.0.0", wheelFile)].Sha256; got != want {
 		t.Errorf("stored Sha256 = %q, want sha256(UPSTREAM)=%q", got, want)
 	}
 }
@@ -47,7 +47,7 @@ func TestPypiServeTrustedHonorsPostFetchBytes(t *testing.T) {
 	dir := t.TempDir()
 	store := newMemStore()
 	goodHash, _, _ := hash.Sha256Hex(bytes.NewReader([]byte("UPSTREAM")))
-	store.recs[pkey("testpkg", "1.0.0", wheelFile)] = Record{Name: "testpkg", Version: "1.0.0", Filename: wheelFile, Sha256: goodHash, ValidatedAt: time.Now().UTC()}
+	store.recs[pkey("", "testpkg", "1.0.0", wheelFile)] = Record{Name: "testpkg", Version: "1.0.0", Filename: wheelFile, Sha256: goodHash, ValidatedAt: time.Now().UTC()}
 	proj, raw := buildPack(time.Now().AddDate(0, 0, -30), []byte("UPSTREAM"))
 	c := &rawClient{project: proj, raw: raw, file: []byte("UPSTREAM")}
 	global := &project.Resolved{Mutation: pipeline.MutationPipeline{Chain: []pipeline.MutationMiddleware{sentinelMutation{}}}}
@@ -61,7 +61,7 @@ func TestPypiServeTrustedHonorsPostFetchBytes(t *testing.T) {
 	// Trust-anchor invariant: the stored hash is of the UPSTREAM bytes, while
 	// the served body is the mutated bytes. The trusted path must not overwrite
 	// the stored hash.
-	if got := store.recs[pkey("testpkg", "1.0.0", wheelFile)].Sha256; got != goodHash {
+	if got := store.recs[pkey("", "testpkg", "1.0.0", wheelFile)].Sha256; got != goodHash {
 		t.Errorf("stored Sha256 = %q, want sha256(UPSTREAM)=%q (trusted path must not rehash mutated bytes)", got, goodHash)
 	}
 }

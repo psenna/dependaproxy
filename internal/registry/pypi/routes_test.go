@@ -31,13 +31,15 @@ type memStore struct {
 	recs map[string]Record
 }
 
-func newMemStore() *memStore           { return &memStore{recs: map[string]Record{}} }
-func pkey(name, ver, fn string) string { return name + "|" + ver + "|" + fn }
+func newMemStore() *memStore { return &memStore{recs: map[string]Record{}} }
+func pkey(projectKey, name, ver, fn string) string {
+	return projectKey + "|" + name + "|" + ver + "|" + fn
+}
 
-func (m *memStore) Get(_ context.Context, name, ver, fn string) (Record, error) {
+func (m *memStore) Get(_ context.Context, projectKey, name, ver, fn string) (Record, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	r, ok := m.recs[pkey(name, ver, fn)]
+	r, ok := m.recs[pkey(projectKey, name, ver, fn)]
 	if !ok {
 		return Record{}, ErrNotFound
 	}
@@ -46,7 +48,7 @@ func (m *memStore) Get(_ context.Context, name, ver, fn string) (Record, error) 
 func (m *memStore) Put(_ context.Context, r Record) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.recs[pkey(r.Name, r.Version, r.Filename)] = r
+	m.recs[pkey(r.ProjectKey, r.Name, r.Version, r.Filename)] = r
 	return nil
 }
 
@@ -431,7 +433,7 @@ func TestPypiUntrustedValidatesStoresServes(t *testing.T) {
 	if len(store.recs) != 1 {
 		t.Fatalf("expected stored record, got %d", len(store.recs))
 	}
-	r := store.recs[pkey("testpkg", "1.0.0", wheelFile)]
+	r := store.recs[pkey("", "testpkg", "1.0.0", wheelFile)]
 	if r.FileType != "wheel" || r.PythonTag != "py3" || r.AbiTag != "none" || r.PlatformTag != "any" {
 		t.Errorf("stored tags = %+v", r)
 	}
@@ -481,7 +483,7 @@ func TestPypiValidationRejectsFresh(t *testing.T) {
 func TestPypiCorruptDBHash502(t *testing.T) {
 	dir := t.TempDir()
 	store := newMemStore()
-	store.recs[pkey("testpkg", "1.0.0", wheelFile)] = Record{Name: "testpkg", Version: "1.0.0", Filename: wheelFile, Sha256: "deadbeef", ValidatedAt: time.Now().UTC()}
+	store.recs[pkey("", "testpkg", "1.0.0", wheelFile)] = Record{Name: "testpkg", Version: "1.0.0", Filename: wheelFile, Sha256: "deadbeef", ValidatedAt: time.Now().UTC()}
 	proj, raw := buildPack(time.Now().AddDate(0, 0, -30), []byte("WHEEL"))
 	c := &rawClient{project: proj, raw: raw, file: []byte("WHEEL")}
 	a := newTestAdapter(t, "/pypi", dir, 0, c, store)
@@ -498,7 +500,7 @@ func TestPypiTamperedCacheRefetches(t *testing.T) {
 	tarball := []byte("GOOD")
 	goodHash, _, _ := hash.Sha256Hex(bytes.NewReader(tarball))
 	store := newMemStore()
-	store.recs[pkey("testpkg", "1.0.0", wheelFile)] = Record{Name: "testpkg", Version: "1.0.0", Filename: wheelFile, Sha256: goodHash, ValidatedAt: time.Now().UTC()}
+	store.recs[pkey("", "testpkg", "1.0.0", wheelFile)] = Record{Name: "testpkg", Version: "1.0.0", Filename: wheelFile, Sha256: goodHash, ValidatedAt: time.Now().UTC()}
 	proj, raw := buildPack(time.Now().AddDate(0, 0, -30), tarball)
 	c := &rawClient{project: proj, raw: raw, file: tarball}
 	a := newTestAdapter(t, "/pypi", dir, 0, c, store)

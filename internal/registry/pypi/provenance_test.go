@@ -124,7 +124,7 @@ func pypiProvenanceMeta(t *testing.T, store *memStore) map[string]any {
 	t.Helper()
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	rec, ok := store.recs[pkey("testpkg", "1.0.0", pypiWheel)]
+	rec, ok := store.recs[pkey("", "testpkg", "1.0.0", pypiWheel)]
 	if !ok {
 		t.Fatal("no stored record")
 	}
