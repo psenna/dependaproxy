@@ -99,8 +99,22 @@ func (a *pypiAdapter) handleFile(w http.ResponseWriter, r *http.Request) {
 	// version is served by no route — the index rewrite maps it to the "_"
 	// sentinel version, and this gate 404s it here. Re-parse the filename
 	// itself (not the path version sentinel) so the two stay symmetric.
-	if v, err := pypifilename.ParseVersion(filename); err != nil || v == "" {
+	//
+	// Security boundary (H1): the {version} path segment must equal the
+	// version actually encoded in filename. Retrieval below selects the
+	// artifact by filename alone (ctx.Version is never consulted), while
+	// every version-keyed check upstream of it -- cve-check, deny-list,
+	// provenance-verify, the trust-store/cache key -- is keyed on ctx.Version.
+	// Without this check a client can request the real bytes of one version
+	// under an unrelated, clean-looking version string and have those checks
+	// evaluate a version that was never actually served.
+	v, err := pypifilename.ParseVersion(filename)
+	if err != nil || v == "" {
 		a.fail(w, r, http.StatusNotFound, "unparseable filename")
+		return
+	}
+	if v != version {
+		a.fail(w, r, http.StatusNotFound, "not found")
 		return
 	}
 	ctx := pipeline.NewPipelineContext(r.Context(), a.logger, "pypi", pkg, version, filename)

@@ -645,3 +645,33 @@ func TestPypiLocalVersionWheelRewritesAndServes(t *testing.T) {
 		t.Fatalf("code=%d body=%q want 200/WHEEL", code, body)
 	}
 }
+
+// TestPypiFileVersionMismatch404s is the regression test for the H1 finding:
+// the {version} path segment must be bound to the artifact actually being
+// served, not trusted as an independent client-supplied value. Without this
+// check, every version-keyed gate (CVE check, deny-list, provenance, the
+// trust-store/cache key) evaluates whatever version the client puts in the
+// URL, while retrieval selects the artifact by filename alone -- so a client
+// could request a real, vulnerable wheel under an unrelated, clean-looking
+// version and have those checks pass against the wrong version entirely.
+func TestPypiFileVersionMismatch404s(t *testing.T) {
+	dir := t.TempDir()
+	proj := &Project{Name: "testpkg", Files: []File{{Filename: wheelFile, URL: "http://up/f.whl"}}}
+	c := &rawClient{project: proj, file: []byte("WHEEL")}
+	a := newTestAdapter(t, "/pypi", dir, 0, c, newMemStore())
+	srv := newTestServer(t, a)
+
+	// wheelFile ("testpkg-1.0.0-py3-none-any.whl") parses to version 1.0.0;
+	// request it under an unrelated version path segment.
+	resp, err := http.Get(srv.URL + "/pypi/files/testpkg/99.99.99/" + wheelFile) //nolint:gosec // G107
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("code=%d want 404", resp.StatusCode)
+	}
+	if atomic.LoadInt32(&c.fileCalls) != 0 {
+		t.Errorf("upstream FetchFile called %d times; want 0 (no bypass on version mismatch)", c.fileCalls)
+	}
+}
