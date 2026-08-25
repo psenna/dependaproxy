@@ -259,6 +259,35 @@ func TestFactoryDecodesParams(t *testing.T) {
 	}
 }
 
+// TestFactoryWithVerifierIgnoresIdentityAndTrustRootDir is the regression
+// test for H4: FactoryWithVerifier must ignore identity/trust_root_dir/
+// timeout in whatever params it's called with -- the scenario is a project's
+// admin-API-submitted middleware params trying to redirect the TUF
+// trust-root cache directory or the identity pin, which the operator's
+// static config pinned the Verifier specifically to prevent.
+// mode/require_provenance/on_error must still apply.
+func TestFactoryWithVerifierIgnoresIdentityAndTrustRootDir(t *testing.T) {
+	pinned := NewSigstoreVerifier(Params{Identity: "^https://github.com/trusted/"})
+	f := FactoryWithVerifier(&fakeSource{}, pinned)
+
+	mw, err := f(yamlNode(`mode: warn
+require_provenance: true
+on_error: fail_closed
+identity: "^https://attacker.example/"
+trust_root_dir: /tmp/evil-trust-root
+timeout: 1s`))
+	if err != nil {
+		t.Fatalf("factory: %v", err)
+	}
+	m := mw.(*Middleware)
+	if m.verifier != pinned {
+		t.Fatalf("verifier = %v (%T), want the pinned Verifier unchanged despite the call's own identity/trust_root_dir params", m.verifier, m.verifier)
+	}
+	if m.mode != modeWarn || !m.requireProv || m.onError != onErrorFailClosed {
+		t.Fatalf("mode/require_provenance/on_error should still be settable per call: mode=%q requireProv=%v onError=%q", m.mode, m.requireProv, m.onError)
+	}
+}
+
 func TestName(t *testing.T) {
 	mw := buildMw(Params{}, &fakeSource{})
 	if mw.Name() != "provenance-verify" {

@@ -45,8 +45,20 @@ type sigstoreVerifier struct {
 	err  error
 }
 
-// newSigstoreVerifier builds the real sigstore-go verifier from params.
-func newSigstoreVerifier(pr Params) Verifier {
+// NewSigstoreVerifier builds the real sigstore-go verifier from pr.
+//
+// Exported so adapters can build one Verifier from the OPERATOR's static
+// top-level configuration and pin it into the "provenance-verify" factory
+// (provenance.FactoryWithVerifier(src, sharedVerifier) instead of
+// provenance.Factory(src)) — see the security-review H4 fix: the nil-verifier
+// path in New rebuilds a fresh sigstoreVerifier from whatever Params it's
+// called with, so a caller able to submit arbitrary params (the admin API's
+// per-project middleware overrides) can redirect TrustRootDir to any
+// filesystem path. A pinned Verifier is immune to that: New ignores
+// pr.Identity/pr.TrustRootDir/pr.Timeout entirely once a non-nil Verifier is
+// supplied, so only pr.Mode/pr.RequireProvenance/pr.OnError can still vary
+// per-project.
+func NewSigstoreVerifier(pr Params) Verifier {
 	if pr.Timeout == 0 {
 		pr.Timeout = defaultTimeout
 	}

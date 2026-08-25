@@ -227,7 +227,8 @@ type params struct {
 }
 
 // Factory builds the middleware from its raw params node. Registered by each
-// adapter under "local-disk-cache".
+// adapter under "local-disk-cache". Every call takes path from its own
+// params — fine for a static, operator-only config.
 var Factory pipeline.RetrievalFactory = func(p yaml.Node, next pipeline.RetrievalMiddleware) (pipeline.RetrievalMiddleware, error) {
 	var pr params
 	if !p.IsZero() {
@@ -236,4 +237,15 @@ var Factory pipeline.RetrievalFactory = func(p yaml.Node, next pipeline.Retrieva
 		}
 	}
 	return New(pr.Path, next), nil
+}
+
+// FactoryFixedPath returns a RetrievalFactory that always roots the cache at
+// path, ignoring whatever `path` a caller's own params specify. Adapters use
+// this to register "local-disk-cache" once operator config has pinned the
+// path, so per-project admin-API overrides (H4) cannot redirect cache writes
+// to an arbitrary directory the proxy process can create/write.
+func FactoryFixedPath(path string) pipeline.RetrievalFactory {
+	return func(_ yaml.Node, next pipeline.RetrievalMiddleware) (pipeline.RetrievalMiddleware, error) {
+		return New(path, next), nil
+	}
 }

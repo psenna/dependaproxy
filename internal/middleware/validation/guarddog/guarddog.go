@@ -93,9 +93,9 @@ type Middleware struct {
 // Name returns the config type string.
 func (*Middleware) Name() string { return name }
 
-// New constructs a guarddog-scan middleware. Empty mode/on_error/binary and
-// non-positive timeout fall back to the defaults; a nil sandbox defaults to
-// true. A nil runner builds the real execRunner from the params.
+// New constructs a guarddog-scan middleware. Empty mode/on_error fall back to
+// the defaults. A nil runner builds the real execRunner from pr via NewRunner
+// (which applies its own binary/sandbox/timeout defaults).
 func New(pr Params, runner Runner) *Middleware {
 	mode := pr.Mode
 	if mode == "" {
@@ -105,6 +105,26 @@ func New(pr Params, runner Runner) *Middleware {
 	if onError == "" {
 		onError = DefaultOnError
 	}
+	if runner == nil {
+		runner = NewRunner(pr)
+	}
+	return &Middleware{runner: runner, mode: mode, onError: onError}
+}
+
+// NewRunner builds the real GuardDog exec-based Runner from pr, applying
+// defaults for empty/unset Binary, Sandbox, and Timeout.
+//
+// Exported so adapters can build one Runner from the OPERATOR's static
+// top-level configuration and pin it into the "guarddog-scan" factory
+// (guarddog.Factory(sharedRunner) instead of guarddog.Factory(nil)) — see the
+// security-review H4 fix: a nil-runner Factory rebuilds a fresh execRunner
+// from whatever Params it's called with, so a caller able to submit arbitrary
+// params (the admin API's per-project middleware overrides) can redirect
+// Binary to any local executable and disable Sandbox. A pinned Runner is
+// immune to that: New ignores pr.Binary/pr.Sandbox/pr.Timeout entirely once a
+// non-nil Runner is supplied, so only pr.Mode/pr.OnError can still vary
+// per-project.
+func NewRunner(pr Params) Runner {
 	timeout := pr.Timeout
 	if timeout <= 0 {
 		timeout = DefaultTimeout
@@ -117,10 +137,7 @@ func New(pr Params, runner Runner) *Middleware {
 	if pr.Sandbox != nil {
 		sandbox = *pr.Sandbox
 	}
-	if runner == nil {
-		runner = &execRunner{binary: binary, timeout: timeout, sandbox: sandbox}
-	}
-	return &Middleware{runner: runner, mode: mode, onError: onError}
+	return &execRunner{binary: binary, timeout: timeout, sandbox: sandbox}
 }
 
 // Validate scans ctx.Tarball.Bytes (already fetched by the pipeline) with
@@ -202,7 +219,10 @@ func (m *Middleware) applyError(ctx *pipeline.PipelineContext, err error) error 
 }
 
 // Factory builds the middleware from its raw params node, registered by each
-// adapter under "guarddog-scan".
+// adapter under "guarddog-scan". A nil r rebuilds a fresh Runner from every
+// call's own params (fine for a static, operator-only config); pass a
+// pre-built Runner (see NewRunner) to pin Binary/Sandbox/Timeout and make the
+// factory safe to also drive from admin-API-submitted, per-project params.
 func Factory(r Runner) pipeline.ValidationFactory {
 	return func(p yaml.Node) (pipeline.ValidationMiddleware, error) {
 		var pr Params

@@ -62,12 +62,23 @@ func Factory(ctx context.Context, cfg config.RegistryConfig, deps adapter.Deps) 
 	}
 	cacheDuration := cveosv.DefaultedCacheDuration(pr.CacheDuration)
 
+	// H4: pin local-disk-cache's filesystem write root to the OPERATOR's own
+	// static config, read now before registering the factory, so a later
+	// per-project admin-API override of local-disk-cache cannot redirect cache
+	// writes to an arbitrary directory. See npm/pypi adapter.go for the fuller
+	// version of this comment (guarddog-scan/provenance-verify don't apply to
+	// goproxy).
+	var diskCachePr struct {
+		Path string `yaml:"path"`
+	}
+	adapter.FirstMiddlewareParams(cfg.Retrieval, "local-disk-cache", &diskCachePr)
+
 	reg := pipeline.NewRegistry()
 	reg.RegisterValidation("deny-list-check", denylist.Factory(denyStore))
 	reg.RegisterValidation("min-publication-age", MinPubFactory)
 	reg.RegisterValidation("cve-check", cve.FactoryWithClient(sharedCVE))
 	reg.RegisterRetrieval("cve-check-retrieval", cverecheck.FactoryWithClientAndCache(sharedCVE, cveStore, cacheDuration, deps.Now))
-	reg.RegisterRetrieval("local-disk-cache", localcache.Factory)
+	reg.RegisterRetrieval("local-disk-cache", localcache.FactoryFixedPath(diskCachePr.Path))
 	reg.RegisterRetrieval("s3-cache", s3cache.Factory)
 	reg.RegisterRetrieval("upstream-registry", UpstreamFactory(client))
 	reg.RegisterMutation("noop", mutation.Factory)

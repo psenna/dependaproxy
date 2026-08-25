@@ -144,6 +144,54 @@ func TestCVESharedParams(t *testing.T) {
 	}
 }
 
+// TestFirstMiddlewareParams covers the pre-scan helper adapters use to pin
+// dangerous middleware fields (H4): a matching entry decodes into out, a
+// present-but-empty-params entry leaves out at its zero value, no match
+// leaves out untouched, and a malformed params node doesn't panic (best
+// effort -- the real factory surfaces the decode error later).
+func TestFirstMiddlewareParams(t *testing.T) {
+	type guarddogLike struct {
+		Binary  string `yaml:"binary"`
+		Sandbox *bool  `yaml:"sandbox"`
+	}
+
+	t.Run("matching entry decodes", func(t *testing.T) {
+		ms := []config.Middleware{
+			{Type: "min-publication-age", Params: yamlNode("min_days: 7")},
+			{Type: "guarddog-scan", Params: yamlNode("binary: /usr/bin/guarddog\nsandbox: false")},
+		}
+		var pr guarddogLike
+		FirstMiddlewareParams(ms, "guarddog-scan", &pr)
+		if pr.Binary != "/usr/bin/guarddog" || pr.Sandbox == nil || *pr.Sandbox {
+			t.Fatalf("got %+v", pr)
+		}
+	})
+
+	t.Run("no match leaves zero value", func(t *testing.T) {
+		ms := []config.Middleware{{Type: "min-publication-age", Params: yamlNode("min_days: 7")}}
+		pr := guarddogLike{Binary: "should-not-change"}
+		FirstMiddlewareParams(ms, "guarddog-scan", &pr)
+		if pr.Binary != "should-not-change" {
+			t.Fatalf("no-match call must not touch out, got %+v", pr)
+		}
+	})
+
+	t.Run("matching entry with no params leaves zero value", func(t *testing.T) {
+		ms := []config.Middleware{{Type: "guarddog-scan"}} // Params is the zero yaml.Node
+		var pr guarddogLike
+		FirstMiddlewareParams(ms, "guarddog-scan", &pr)
+		if pr.Binary != "" || pr.Sandbox != nil {
+			t.Fatalf("got %+v, want zero value", pr)
+		}
+	})
+
+	t.Run("malformed params does not panic", func(t *testing.T) {
+		ms := []config.Middleware{{Type: "guarddog-scan", Params: yamlNode("binary: [not, a, string]")}}
+		var pr guarddogLike
+		FirstMiddlewareParams(ms, "guarddog-scan", &pr) // must not panic
+	})
+}
+
 func TestBuildUnknownType(t *testing.T) {
 	Register("unknown-test-type", func(_ context.Context, _ config.RegistryConfig, _ Deps) (Adapter, error) {
 		return fakeAdapter{prefix: "/u"}, nil
