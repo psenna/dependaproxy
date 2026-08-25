@@ -179,7 +179,7 @@ func New(pr Params, src Source, v Verifier) *Middleware {
 		pr.Timeout = defaultTimeout
 	}
 	if v == nil {
-		v = newSigstoreVerifier(pr)
+		v = NewSigstoreVerifier(pr)
 	}
 	return &Middleware{
 		src:         src,
@@ -192,15 +192,41 @@ func New(pr Params, src Source, v Verifier) *Middleware {
 
 // Factory returns a pipeline.ValidationFactory bound to src, registered by the
 // npm/pypi adapters under "provenance-verify". The real sigstore verifier is
-// installed via New's nil-verifier default.
+// installed via New's nil-verifier default, so every call builds its own
+// verifier from its own params — fine for a static, operator-only config.
 func Factory(src Source) pipeline.ValidationFactory {
 	return func(p yaml.Node) (pipeline.ValidationMiddleware, error) {
-		var pr Params
-		if !p.IsZero() {
-			if err := p.Decode(&pr); err != nil {
-				return nil, fmt.Errorf("%s: decode params: %w", name, err)
-			}
+		pr, err := decodeParams(p)
+		if err != nil {
+			return nil, err
 		}
 		return New(pr, src, nil), nil
 	}
+}
+
+// FactoryWithVerifier is Factory with a pinned Verifier: every call uses v
+// regardless of its own params' Identity/TrustRootDir/Timeout (New ignores
+// those once a non-nil Verifier is supplied), so only Mode/RequireProvenance/
+// OnError can still vary per call. Adapters use this to register
+// "provenance-verify" once operator config has pinned the verifier via
+// NewSigstoreVerifier, so per-project admin-API overrides (H4) cannot
+// redirect the TUF trust-root cache directory.
+func FactoryWithVerifier(src Source, v Verifier) pipeline.ValidationFactory {
+	return func(p yaml.Node) (pipeline.ValidationMiddleware, error) {
+		pr, err := decodeParams(p)
+		if err != nil {
+			return nil, err
+		}
+		return New(pr, src, v), nil
+	}
+}
+
+func decodeParams(p yaml.Node) (Params, error) {
+	var pr Params
+	if !p.IsZero() {
+		if err := p.Decode(&pr); err != nil {
+			return Params{}, fmt.Errorf("%s: decode params: %w", name, err)
+		}
+	}
+	return pr, nil
 }

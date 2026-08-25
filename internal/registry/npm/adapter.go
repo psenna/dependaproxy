@@ -57,15 +57,39 @@ func Factory(ctx context.Context, cfg config.RegistryConfig, deps adapter.Deps) 
 	}
 	cacheDuration := cveosv.DefaultedCacheDuration(pr.CacheDuration)
 
+	// H4: guarddog-scan (exec binary/sandbox), provenance-verify (TUF trust-root
+	// cache dir), and local-disk-cache (filesystem write root) each carry a
+	// field that must never vary per project -- the admin API lets a project
+	// override params for any middleware type its pipeline uses, and the
+	// factories above this comment silently rebuild a fresh Runner/Verifier/
+	// cache root from whatever params they're called with. Read the OPERATOR's
+	// own static config for these three types now, before registering their
+	// factories, and pin the dangerous fields to that reading: a project can
+	// still turn guarddog-scan's mode from deny to warn, but it can no longer
+	// point Binary at an arbitrary executable, disable Sandbox, redirect
+	// TrustRootDir, or redirect the disk cache's write root.
+	var guarddogPr guarddog.Params
+	adapter.FirstMiddlewareParams(cfg.Validation, "guarddog-scan", &guarddogPr)
+	guarddogRunner := guarddog.NewRunner(guarddogPr)
+
+	var provenancePr provenance.Params
+	adapter.FirstMiddlewareParams(cfg.Validation, "provenance-verify", &provenancePr)
+	provenanceVerifier := provenance.NewSigstoreVerifier(provenancePr)
+
+	var diskCachePr struct {
+		Path string `yaml:"path"`
+	}
+	adapter.FirstMiddlewareParams(cfg.Retrieval, "local-disk-cache", &diskCachePr)
+
 	reg := pipeline.NewRegistry()
 	reg.RegisterValidation("deny-list-check", denylist.Factory(denyStore))
 	reg.RegisterValidation("min-publication-age", MinPubFactory)
 	reg.RegisterValidation("cve-check", cve.FactoryWithClient(sharedCVE))
 	reg.RegisterValidation("malware-scan", malware.Factory)
-	reg.RegisterValidation("guarddog-scan", guarddog.Factory(nil))
-	reg.RegisterValidation("provenance-verify", provenance.Factory(NewProvenanceSource(client)))
+	reg.RegisterValidation("guarddog-scan", guarddog.Factory(guarddogRunner))
+	reg.RegisterValidation("provenance-verify", provenance.FactoryWithVerifier(NewProvenanceSource(client), provenanceVerifier))
 	reg.RegisterRetrieval("cve-check-retrieval", cverecheck.FactoryWithClientAndCache(sharedCVE, cveStore, cacheDuration, deps.Now))
-	reg.RegisterRetrieval("local-disk-cache", localcache.Factory)
+	reg.RegisterRetrieval("local-disk-cache", localcache.FactoryFixedPath(diskCachePr.Path))
 	reg.RegisterRetrieval("s3-cache", s3cache.Factory)
 	reg.RegisterRetrieval("upstream-registry", UpstreamFactory(client))
 	reg.RegisterMutation("noop", mutation.Factory)

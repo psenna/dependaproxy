@@ -279,6 +279,39 @@ func TestFactorySandboxFalse(t *testing.T) {
 	}
 }
 
+// TestFactoryPinnedRunnerIgnoresBinaryAndSandbox is the regression test for
+// H4: a Factory built with a non-nil (pinned) Runner must ignore
+// binary/sandbox/timeout in whatever params it's called with -- the scenario
+// is a project's admin-API-submitted middleware params trying to redirect the
+// scanner binary or disable its sandbox, which the operator's static config
+// pinned the Runner specifically to prevent. mode/on_error must still apply.
+func TestFactoryPinnedRunnerIgnoresBinaryAndSandbox(t *testing.T) {
+	pinned := NewRunner(Params{Binary: "/usr/bin/guarddog", Sandbox: boolPtr(true)})
+	f := Factory(pinned)
+
+	var n yaml.Node
+	if err := n.Encode(map[string]any{
+		"mode": "warn", "on_error": "fail_closed",
+		"binary": "/tmp/evil", "sandbox": false, "timeout": "1s",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	mw, err := f(n)
+	if err != nil {
+		t.Fatalf("factory: %v", err)
+	}
+	m := mw.(*Middleware)
+	if m.runner != pinned {
+		t.Fatalf("runner = %v (%T), want the pinned Runner unchanged despite the call's own binary/sandbox params", m.runner, m.runner)
+	}
+	// The fields New() genuinely reads off pr regardless of runner pinning
+	// still apply -- proving the pin is specific to the dangerous fields, not
+	// a blanket param ignore.
+	if m.mode != "warn" || m.onError != "fail_closed" {
+		t.Fatalf("mode/on_error should still be settable per call: mode=%q on_error=%q", m.mode, m.onError)
+	}
+}
+
 func TestExecRunnerArgConstruction(t *testing.T) {
 	bin := stubBinary(t, "", "", 0)
 	argsFile := filepath.Join(t.TempDir(), "args.txt")

@@ -102,6 +102,30 @@ func decodeCVEParams(n yaml.Node) cveosv.Params {
 	return pr
 }
 
+// FirstMiddlewareParams decodes the params of the first middleware of type
+// mwType found in ms into out (a pointer), leaving out at its zero value if
+// no entry matches or its params fail to decode.
+//
+// This exists so an adapter Factory can read the OPERATOR's own static
+// configuration for a middleware type BEFORE registering that type's
+// pipeline.Registry factory — the read value is then baked into a "fixed"
+// factory (e.g. guarddog.Factory(guarddog.NewRunner(pr)), instead of
+// guarddog.Factory(nil)) so a later per-project admin-API override of that
+// middleware cannot influence the fields the fixed factory pinned. See the
+// security-review H4 fix and CVESharedParams above, which predates this as a
+// bespoke, cve-specific version of the same pattern.
+func FirstMiddlewareParams(ms []config.Middleware, mwType string, out interface{}) {
+	for _, m := range ms {
+		if m.Type != mwType {
+			continue
+		}
+		if !m.Params.IsZero() {
+			_ = m.Params.Decode(out) // best-effort; a malformed operator config surfaces later when the real factory decodes it again
+		}
+		return
+	}
+}
+
 // Build builds all adapters for the configured registries, rejecting unknown
 // types. ctx is passed to each factory so startup work respects its deadline.
 func Build(ctx context.Context, cfgs []config.RegistryConfig, deps Deps) ([]Adapter, error) {

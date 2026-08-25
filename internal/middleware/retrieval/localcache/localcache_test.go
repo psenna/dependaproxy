@@ -157,6 +157,32 @@ func TestFactoryEmpty(t *testing.T) {
 	}
 }
 
+// TestFactoryFixedPathIgnoresParams is the regression test for H4/M10:
+// FactoryFixedPath must ignore whatever `path` a caller's own params specify
+// -- the scenario is a project's admin-API-submitted middleware params trying
+// to redirect the cache's filesystem write root, which the operator's static
+// config pinned specifically to prevent.
+func TestFactoryFixedPathIgnoresParams(t *testing.T) {
+	f := FactoryFixedPath("/var/lib/dependaproxy/cache")
+
+	var n yaml.Node
+	if err := n.Encode(map[string]any{"path": "/tmp/attacker-controlled"}); err != nil {
+		t.Fatal(err)
+	}
+	mw, err := f(n, nil)
+	if err != nil {
+		t.Fatalf("factory: %v", err)
+	}
+	m := mw.(*Middleware)
+	db, ok := m.backend.(*DiskBackend)
+	if !ok {
+		t.Fatalf("backend = %T, want *DiskBackend", m.backend)
+	}
+	if db.base != "/var/lib/dependaproxy/cache" {
+		t.Errorf("base = %q, want the pinned path unchanged despite the call's own path param", db.base)
+	}
+}
+
 // memBackend is an in-process CacheBackend for tests.
 type memBackend struct {
 	mu   sync.Mutex
