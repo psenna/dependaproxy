@@ -1,6 +1,6 @@
 // Package pypifilename parses PyPI artifact filenames (wheels and sdists) into
-// the version + compatibility tags used to key the per-file trust store and to
-// route file requests. Wheel names follow PEP 427/491/425/600:
+// the distribution name + version + compatibility tags used to key the per-file
+// trust store and to route file requests. Wheel names follow PEP 427/491/425/600:
 //
 //	{distribution}-{version}(-{build})?-{python}-{abi}-{platform}.whl
 //
@@ -14,6 +14,7 @@ import (
 
 // Info is the parsed filename.
 type Info struct {
+	Name        string // distribution name as encoded in the filename (PEP 427 escaped, NOT PEP 503 normalized)
 	Version     string
 	FileType    string // "wheel" | "sdist"
 	PythonTag   string // wheel only; "" for sdist
@@ -41,6 +42,7 @@ func parseWheel(filename string) (Info, error) {
 		return Info{}, fmt.Errorf("pypifilename: invalid wheel filename %q", filename)
 	}
 	return Info{
+		Name:        parts[0],
 		Version:     parts[1],
 		FileType:    "wheel",
 		PythonTag:   parts[len(parts)-3],
@@ -57,11 +59,12 @@ func parseSdist(filename string) Info {
 			break
 		}
 	}
-	version := name
+	out := Info{Version: name, FileType: "sdist"}
 	if idx := strings.LastIndex(name, "-"); idx >= 0 {
-		version = name[idx+1:]
+		out.Name = name[:idx]
+		out.Version = name[idx+1:]
 	}
-	return Info{Version: version, FileType: "sdist"}
+	return out
 }
 
 // ParseVersion returns just the version parsed from the filename.
@@ -71,4 +74,16 @@ func ParseVersion(filename string) (string, error) {
 		return "", err
 	}
 	return i.Version, nil
+}
+
+// ParseName returns just the distribution name parsed from the filename (PEP
+// 427 for wheels, PEP 625 for sdists). Like ParseVersion, it returns an error
+// only for an empty filename or a malformed wheel; a degenerate sdist with no
+// "-" returns ("", nil). Callers must check both err and name == "".
+func ParseName(filename string) (string, error) {
+	i, err := Parse(filename)
+	if err != nil {
+		return "", err
+	}
+	return i.Name, nil
 }

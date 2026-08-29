@@ -141,6 +141,15 @@ registries:
     # plus these extra hosts (e.g. CDN mirrors for a private mirror).
     # allowed_upstream_hosts:
     #   - files.example-mirror.com
+    # Lockfile portability (issue #185): serve
+    #   GET /pypi/upstream/{host}/{path...}
+    # as an alias for /pypi/files/{name}/{version}/{filename}, so a canonical
+    # uv.lock / pdm.lock (absolute files.pythonhosted.org URLs) can be pointed
+    # at the proxy with one sed and restored with its inverse. {host} must be in
+    # the allowlist above; the path prefix is never fetched — the bytes are
+    # resolved through the same trust flow, from the same index lookup, as
+    # /pypi/files/. Default true; set false to serve /simple + /files only.
+    # upstream_alias: true
     validation:
       # deny-list-check is auto-prepended FIRST by the resolver for every
       # request scope; it denies fast (403, stored reason) when this

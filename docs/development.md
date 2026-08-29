@@ -73,7 +73,7 @@ Middleware that persists state to Postgres names its tables
   adapters; see the `cve-check`, `malware-scan`, and `strip-install-scripts`
   implementations for the validation / retrieval / mutation patterns).
 - **New project config via the admin API** — projects are runtime-managed through
-  `POST/GET/PUT/DELETE /admin/projects` (see [Examples](examples) #5).
+  `POST/GET/PUT/DELETE /admin/projects` (see [Examples](examples) #6).
 
 The full architecture, adapter contracts, and middleware semantics are in the
 [repository README](https://github.com/psenna/dependaproxy#readme).

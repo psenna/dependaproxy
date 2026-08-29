@@ -37,6 +37,9 @@ manager at the proxy with no client-side changes beyond the registry/index URL.
   every package@version it downloads as a per-project SBOM.
 - **Supply-chain-safe npm** — npm traffic flows through the proxy; the public
   registries are network-blocked from workload containers.
+- **Lockfile portability** — a reversible one-line rewrite points a canonical
+  `uv.lock` / `pdm.lock` at the proxy via the `/pypi/upstream/{host}/{path...}`
+  alias, without relaxing any validation.
 
 ## Run it in 60 seconds
 

@@ -23,6 +23,7 @@ import (
 	"github.com/psenna/dependaproxy/internal/middleware/retrieval/localcache"
 	"github.com/psenna/dependaproxy/internal/pipeline"
 	"github.com/psenna/dependaproxy/internal/project"
+	"github.com/psenna/dependaproxy/internal/registry/registryhttp"
 	"gopkg.in/yaml.v3"
 )
 
@@ -301,13 +302,19 @@ func newTestAdapterWithGlobal(t *testing.T, prefix, dir string, minDays int, cli
 		global.Mutation = mp
 	}
 	resolver := project.NewResolver("pypi", reg, fakeProjectStore{}, global)
+	allow, err := registryhttp.NewAllowlist("https://pypi.org/simple", []string{"files.pythonhosted.org"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	return &pypiAdapter{
-		prefix:   prefix,
-		storage:  store,
-		client:   client,
-		resolver: resolver,
-		logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
-		now:      func() time.Time { return time.Now().UTC() },
+		prefix:        prefix,
+		storage:       store,
+		client:        client,
+		resolver:      resolver,
+		logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
+		now:           func() time.Time { return time.Now().UTC() },
+		upstreamAlias: true,
+		upstreamHosts: allow,
 	}
 }
 
@@ -675,5 +682,304 @@ func TestPypiFileVersionMismatch404s(t *testing.T) {
 	}
 	if atomic.LoadInt32(&c.fileCalls) != 0 {
 		t.Errorf("upstream FetchFile called %d times; want 0 (no bypass on version mismatch)", c.fileCalls)
+	}
+}
+
+// --- issue #185: /upstream/{host}/{path...} path-mirroring alias ---
+
+// blakeHex is a stand-in for the packages/<2>/<2>/<60hex>/ path digest — the
+// alias route treats it as decoration and never parses it.
+const blakeHex = "e900b21e0a1d1ab3a2c4d3b0a6f8e7d5c4b3a2918f7e6d5c4b3a2918f7e6d5c40"
+
+const aliasPath = "/pypi/upstream/files.pythonhosted.org/packages/3e/30/" +
+	blakeHex + "/" + wheelFile
+
+// aliasURL builds an alias request path under the "/pypi" prefix (newTestServer
+// StripPrefix's "/pypi", so the request must still carry it).
+func aliasURL(host, pathPrefix, filename string) string {
+	return "/pypi/upstream/" + host + "/" + pathPrefix + "/" + filename
+}
+
+// buildPackNamed is buildPack with a caller-chosen distribution filename.
+func buildPackNamed(pub time.Time, filename string, file []byte) (*Project, []byte) {
+	proj := &Project{Name: "x", Files: []File{{Filename: filename, URL: "http://up/f", UploadTime: pub}}}
+	raw := []byte(`{"meta":{"api-version":"1.0"},"name":"x","files":[{"filename":"` + filename +
+		`","url":"http://up/f","upload-time":"` + pub.Format(time.RFC3339Nano) + `"}]}`)
+	return proj, raw
+}
+
+func TestPypiUpstreamAliasServesArtifact(t *testing.T) {
+	dir := t.TempDir()
+	store := newMemStore()
+	proj, raw := buildPack(time.Now().AddDate(0, 0, -30), []byte("WHEEL"))
+	c := &rawClient{project: proj, raw: raw, file: []byte("WHEEL")}
+	a := newTestAdapter(t, "/pypi", dir, 0, c, store)
+	srv := newTestServer(t, a)
+
+	resp, err := http.Get(srv.URL + aliasPath) //nolint:gosec // G107: proxy URL under test
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || string(body) != "WHEEL" {
+		t.Fatalf("code=%d body=%q want 200/WHEEL", resp.StatusCode, body)
+	}
+	if len(store.recs) != 1 {
+		t.Fatalf("stored %d records, want 1", len(store.recs))
+	}
+	r, ok := store.recs[pkey("", "testpkg", "1.0.0", wheelFile)]
+	if !ok {
+		t.Fatalf("record not keyed (\"\", testpkg, 1.0.0, %s); recs=%v", wheelFile, store.recs)
+	}
+	want, _, _ := hash.Sha256Hex(bytes.NewReader([]byte("WHEEL")))
+	if r.Sha256 != want {
+		t.Errorf("stored Sha256 = %q, want %q", r.Sha256, want)
+	}
+}
+
+func TestPypiUpstreamAliasSameRecordAsFilesRoute(t *testing.T) {
+	dir := t.TempDir()
+	store := newMemStore()
+	proj, raw := buildPack(time.Now().AddDate(0, 0, -30), []byte("WHEEL"))
+	c := &rawClient{project: proj, raw: raw, file: []byte("WHEEL")}
+	a := newTestAdapter(t, "/pypi", dir, 0, c, store)
+	srv := newTestServer(t, a)
+
+	resp, err := http.Get(srv.URL + aliasPath) //nolint:gosec // G107
+	if err != nil {
+		t.Fatal(err)
+	}
+	aliasBody, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("alias code=%d want 200", resp.StatusCode)
+	}
+
+	resp, err = http.Get(srv.URL + "/pypi/files/testpkg/1.0.0/" + wheelFile) //nolint:gosec // G107
+	if err != nil {
+		t.Fatal(err)
+	}
+	filesBody, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("files code=%d want 200", resp.StatusCode)
+	}
+	if !bytes.Equal(aliasBody, filesBody) {
+		t.Errorf("alias body %q != files body %q", aliasBody, filesBody)
+	}
+	if len(store.recs) != 1 {
+		t.Fatalf("stored %d records, want 1 (alias and /files/ share the trust key)", len(store.recs))
+	}
+}
+
+// TestPypiUpstreamAliasRunsValidation backs the documented claim that the alias
+// relaxes nothing: a release younger than min-publication-age 403s through
+// /upstream/ exactly as it does through /files/, and is not stored.
+func TestPypiUpstreamAliasRunsValidation(t *testing.T) {
+	dir := t.TempDir()
+	store := newMemStore()
+	proj, raw := buildPack(time.Now(), []byte("WHEEL"))
+	c := &rawClient{project: proj, raw: raw, file: []byte("WHEEL")}
+	a := newTestAdapter(t, "/pypi", dir, 7, c, store)
+	srv := newTestServer(t, a)
+
+	resp, err := http.Get(srv.URL + aliasPath) //nolint:gosec // G107
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("code=%d want 403 (min-publication-age must still gate the alias route)", resp.StatusCode)
+	}
+	if len(store.recs) != 0 {
+		t.Errorf("rejected file must not be stored; recs=%d", len(store.recs))
+	}
+}
+
+func TestPypiUpstreamAliasHostNotAllowlisted(t *testing.T) {
+	dir := t.TempDir()
+	proj, raw := buildPack(time.Now().AddDate(0, 0, -30), []byte("WHEEL"))
+	c := &rawClient{project: proj, raw: raw, file: []byte("WHEEL")}
+	a := newTestAdapter(t, "/pypi", dir, 0, c, newMemStore())
+	srv := newTestServer(t, a)
+
+	resp, err := http.Get(srv.URL + aliasURL("evil.example.com", "packages/3e/30/"+blakeHex, wheelFile)) //nolint:gosec // G107
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("code=%d want 404", resp.StatusCode)
+	}
+	if atomic.LoadInt32(&c.fileCalls) != 0 {
+		t.Errorf("upstream FetchFile called %d times; want 0", c.fileCalls)
+	}
+}
+
+func TestPypiUpstreamAliasUnparseableFilename404(t *testing.T) {
+	for name, fn := range map[string]string{
+		"malformed wheel":  "packages/3e/30/" + blakeHex + "/bad.whl",
+		"degenerate sdist": "packages/3e/30/" + blakeHex + "/foo.tar.gz",
+		"empty name sdist": "packages/3e/30/" + blakeHex + "/.tar.gz",
+		"empty path":       "",
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			proj, raw := buildPack(time.Now().AddDate(0, 0, -30), []byte("WHEEL"))
+			c := &rawClient{project: proj, raw: raw, file: []byte("WHEEL")}
+			a := newTestAdapter(t, "/pypi", dir, 0, c, newMemStore())
+			srv := newTestServer(t, a)
+
+			resp, err := http.Get(srv.URL + "/pypi/upstream/files.pythonhosted.org/" + fn) //nolint:gosec // G107
+			if err != nil {
+				t.Fatal(err)
+			}
+			_ = resp.Body.Close()
+			if resp.StatusCode != http.StatusNotFound {
+				t.Fatalf("code=%d want 404", resp.StatusCode)
+			}
+			if atomic.LoadInt32(&c.fileCalls) != 0 {
+				t.Errorf("upstream FetchFile called %d times; want 0", c.fileCalls)
+			}
+		})
+	}
+}
+
+func TestPypiUpstreamAliasMetadataFile404(t *testing.T) {
+	dir := t.TempDir()
+	proj, raw := buildPack(time.Now().AddDate(0, 0, -30), []byte("WHEEL"))
+	c := &rawClient{project: proj, raw: raw, file: []byte("WHEEL")}
+	a := newTestAdapter(t, "/pypi", dir, 0, c, newMemStore())
+	srv := newTestServer(t, a)
+
+	resp, err := http.Get(srv.URL + aliasURL("files.pythonhosted.org", "packages/3e/30/"+blakeHex, wheelFile+".metadata")) //nolint:gosec // G107
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("code=%d want 404", resp.StatusCode)
+	}
+	if atomic.LoadInt32(&c.fileCalls) != 0 {
+		t.Errorf("upstream FetchFile called %d times; want 0", c.fileCalls)
+	}
+}
+
+func TestPypiUpstreamAliasProjectScopedTracked(t *testing.T) {
+	dir := t.TempDir()
+	proj, raw := buildPack(time.Now().AddDate(0, 0, -30), []byte("WHEEL"))
+	c := &rawClient{project: proj, raw: raw, file: []byte("WHEEL")}
+	tracker := &fakeDependencyTracker{}
+	a := newTestAdapterWithTracker(t, "/pypi", dir, 0, c, newMemStore(), tracker)
+	srv := newTestServer(t, a)
+
+	resp, err := http.Get(srv.URL + "/pypi/p/acme/upstream/files.pythonhosted.org/packages/3e/30/" + blakeHex + "/" + wheelFile) //nolint:gosec // G107
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || string(body) != "WHEEL" {
+		t.Fatalf("code=%d body=%q want 200/WHEEL", resp.StatusCode, body)
+	}
+	recs := tracker.all()
+	if len(recs) != 1 {
+		t.Fatalf("tracked %d records, want 1", len(recs))
+	}
+	wantHash, _, _ := hash.Sha256Hex(bytes.NewReader([]byte("WHEEL")))
+	got := recs[0]
+	if got.ProjectKey != "acme" || got.Registry != "pypi" || got.Pkg != "testpkg" ||
+		got.Version != "1.0.0" || got.ArtifactID != wheelFile || got.SHA256 != wantHash {
+		t.Errorf("record = %+v", got)
+	}
+}
+
+func TestPypiUpstreamAliasDisabled404(t *testing.T) {
+	dir := t.TempDir()
+	proj, raw := buildPack(time.Now().AddDate(0, 0, -30), []byte("WHEEL"))
+	c := &rawClient{project: proj, raw: raw, file: []byte("WHEEL")}
+	a := newTestAdapter(t, "/pypi", dir, 0, c, newMemStore())
+	a.upstreamAlias = false
+	srv := newTestServer(t, a)
+
+	resp, err := http.Get(srv.URL + aliasPath) //nolint:gosec // G107
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("alias code=%d want 404 when disabled", resp.StatusCode)
+	}
+
+	resp, err = http.Get(srv.URL + "/pypi/files/testpkg/1.0.0/" + wheelFile) //nolint:gosec // G107
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("/files/ code=%d want 200", resp.StatusCode)
+	}
+}
+
+func TestPypiUpstreamAliasNormalizesName(t *testing.T) {
+	dir := t.TempDir()
+	store := newMemStore()
+	const fn = "Annotated_Doc-0.0.5-py3-none-any.whl"
+	proj, raw := buildPackNamed(time.Now().AddDate(0, 0, -30), fn, []byte("WHEEL"))
+	c := &rawClient{project: proj, raw: raw, file: []byte("WHEEL")}
+	a := newTestAdapter(t, "/pypi", dir, 0, c, store)
+	srv := newTestServer(t, a)
+
+	resp, err := http.Get(srv.URL + aliasURL("files.pythonhosted.org", "packages/3e/30/"+blakeHex, fn)) //nolint:gosec // G107
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("code=%d want 200", resp.StatusCode)
+	}
+	if _, ok := store.recs[pkey("", "annotated-doc", "0.0.5", fn)]; !ok {
+		t.Errorf("record not stored under PEP 503 normalized name; recs=%v", store.recs)
+	}
+}
+
+func TestPypiFileRouteNormalizesStoreKey(t *testing.T) {
+	dir := t.TempDir()
+	store := newMemStore()
+	const fn = "annotated_doc-0.0.5-py3-none-any.whl"
+	proj, raw := buildPackNamed(time.Now().AddDate(0, 0, -30), fn, []byte("WHEEL"))
+	c := &rawClient{project: proj, raw: raw, file: []byte("WHEEL")}
+	a := newTestAdapter(t, "/pypi", dir, 0, c, store)
+	srv := newTestServer(t, a)
+
+	resp, err := http.Get(srv.URL + "/pypi/files/Annotated.Doc/0.0.5/" + fn) //nolint:gosec // G107
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("code=%d want 200", resp.StatusCode)
+	}
+	if _, ok := store.recs[pkey("", "annotated-doc", "0.0.5", fn)]; !ok {
+		t.Errorf("/files/ record not stored under PEP 503 normalized name; recs=%v", store.recs)
+	}
+}
+
+func TestPypiUpstreamAliasPathPrefixIsDecoration(t *testing.T) {
+	dir := t.TempDir()
+	proj, raw := buildPack(time.Now().AddDate(0, 0, -30), []byte("WHEEL"))
+	c := &rawClient{project: proj, raw: raw, file: []byte("WHEEL")}
+	a := newTestAdapter(t, "/pypi", dir, 0, c, newMemStore())
+	srv := newTestServer(t, a)
+
+	resp, err := http.Get(srv.URL + aliasURL("files.pythonhosted.org", "anything/at/all", wheelFile)) //nolint:gosec // G107
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || string(body) != "WHEEL" {
+		t.Fatalf("code=%d body=%q want 200/WHEEL", resp.StatusCode, body)
 	}
 }

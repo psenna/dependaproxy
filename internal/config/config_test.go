@@ -135,6 +135,27 @@ func TestAdminTokenEqualsToken(t *testing.T) {
 	wantErr(t, "admin_token_equals_token.yaml", "auth.admin_token must differ from auth.token")
 }
 
+// TestUpstreamAlias pins the yaml wiring of the pypi lockfile-portability
+// alias toggle (issue #185). It is a tri-state *bool: unset must stay nil so
+// the adapter can default it to true, and an explicit false must survive Load —
+// a wrong/typo'd yaml tag would silently turn an operator's "reduce the attack
+// surface" switch into a no-op.
+func TestUpstreamAlias(t *testing.T) {
+	c := mustLoad(t, "upstream_alias.yaml")
+	if len(c.Registries) != 3 {
+		t.Fatalf("registries = %d, want 3", len(c.Registries))
+	}
+	if c.Registries[0].UpstreamAlias != nil {
+		t.Errorf("unset upstream_alias = %v, want nil (adapter defaults it to true)", *c.Registries[0].UpstreamAlias)
+	}
+	if v := c.Registries[1].UpstreamAlias; v == nil || !*v {
+		t.Errorf("upstream_alias: true decoded as %v, want true", v)
+	}
+	if v := c.Registries[2].UpstreamAlias; v == nil || *v {
+		t.Errorf("upstream_alias: false decoded as %v, want false", v)
+	}
+}
+
 func TestDefaults(t *testing.T) {
 	c := mustLoad(t, "multi.yaml")
 	c.Server.Addr = ""

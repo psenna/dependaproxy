@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"github.com/psenna/dependaproxy/internal/pipeline"
 	"github.com/psenna/dependaproxy/internal/project"
 	"github.com/psenna/dependaproxy/internal/pypifilename"
+	"github.com/psenna/dependaproxy/internal/registry/registryhttp"
 )
 
 // unparseableVersion is the version path segment used for files whose filename
@@ -34,6 +36,12 @@ type pypiAdapter struct {
 	tracker  project.DependencyTracker // nil on the dispatch-only/default path
 	logger   *slog.Logger
 	now      func() time.Time
+
+	// upstreamAlias enables the /upstream/{host}/{path...} path-mirroring alias
+	// route (issue #185); upstreamHosts is the same allowlist the upstream
+	// client fetches under, used for a cheap inbound membership check.
+	upstreamAlias bool
+	upstreamHosts *registryhttp.Allowlist
 }
 
 // Prefix returns the URL path prefix.
@@ -49,6 +57,9 @@ func (a *pypiAdapter) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /simple/{name}/", a.handleIndex)
 	mux.HandleFunc("GET /files/{name}/{version}/{filename}", a.handleFile)
+	if a.upstreamAlias {
+		mux.HandleFunc("GET /upstream/{host}/{path...}", a.handleUpstream)
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if remaining, key := pipeline.ParseProjectPath(r.URL.Path); key != "" {
 			r = r.WithContext(pipeline.ContextWithProjectKey(r.Context(), key))
@@ -80,12 +91,45 @@ func (a *pypiAdapter) handleIndex(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(rewritten) //nolint:gosec // G705: a proxy writes upstream content by design
 }
 
-// handleFile serves a file through the trust flow.
+// handleFile serves a file through the trust flow (the /files/ route).
 func (a *pypiAdapter) handleFile(w http.ResponseWriter, r *http.Request) {
 	pkg := r.PathValue("name")
 	version := r.PathValue("version")
 	filename := r.PathValue("filename")
 	if pkg == "" || version == "" || filename == "" {
+		a.fail(w, r, http.StatusNotFound, "not found")
+		return
+	}
+	if strings.HasSuffix(filename, ".metadata") {
+		a.fail(w, r, http.StatusNotFound, "metadata not served")
+		return
+	}
+	v, err := pypifilename.ParseVersion(filename)
+	if err != nil || v == "" {
+		a.fail(w, r, http.StatusNotFound, "unparseable filename")
+		return
+	}
+	// Security boundary (H1): the {version} path segment must equal the version
+	// actually encoded in filename. This is the /files/-route path-segment
+	// binding — serveArtifact re-derives the version from filename alone and
+	// keys every version-keyed gate (cve-check, deny-list, provenance-verify,
+	// the trust-store/cache key) on it, so without this compare a client could
+	// request the real bytes of one version under an unrelated, clean-looking
+	// version string in the URL.
+	if v != version {
+		a.fail(w, r, http.StatusNotFound, "not found")
+		return
+	}
+	a.serveArtifact(w, r, NormalizeName(pkg), filename)
+}
+
+// serveArtifact runs the full trust flow for one artifact of project `name`.
+// The version is derived from `filename` here and nowhere else, so every
+// version-keyed gate (cve-check, deny-list, provenance, the trust-store/cache
+// key) is bound to the bytes actually served (H1) no matter which route called
+// in. `name` must already be PEP 503 normalized (pypi.NormalizeName).
+func (a *pypiAdapter) serveArtifact(w http.ResponseWriter, r *http.Request, name, filename string) {
+	if name == "" || filename == "" {
 		a.fail(w, r, http.StatusNotFound, "not found")
 		return
 	}
@@ -100,25 +144,12 @@ func (a *pypiAdapter) handleFile(w http.ResponseWriter, r *http.Request) {
 	// version is served by no route — the index rewrite maps it to the "_"
 	// sentinel version, and this gate 404s it here. Re-parse the filename
 	// itself (not the path version sentinel) so the two stay symmetric.
-	//
-	// Security boundary (H1): the {version} path segment must equal the
-	// version actually encoded in filename. Retrieval below selects the
-	// artifact by filename alone (ctx.Version is never consulted), while
-	// every version-keyed check upstream of it -- cve-check, deny-list,
-	// provenance-verify, the trust-store/cache key -- is keyed on ctx.Version.
-	// Without this check a client can request the real bytes of one version
-	// under an unrelated, clean-looking version string and have those checks
-	// evaluate a version that was never actually served.
-	v, err := pypifilename.ParseVersion(filename)
-	if err != nil || v == "" {
+	version, err := pypifilename.ParseVersion(filename)
+	if err != nil || version == "" {
 		a.fail(w, r, http.StatusNotFound, "unparseable filename")
 		return
 	}
-	if v != version {
-		a.fail(w, r, http.StatusNotFound, "not found")
-		return
-	}
-	ctx := pipeline.NewPipelineContext(r.Context(), a.logger, "pypi", pkg, version, filename)
+	ctx := pipeline.NewPipelineContext(r.Context(), a.logger, "pypi", name, version, filename)
 	ctx.ProjectKey = pipeline.ProjectKeyFromContext(r.Context())
 	rp, err := a.resolver.Resolve(ctx.Ctx, ctx.ProjectKey)
 	if err != nil {
@@ -129,7 +160,7 @@ func (a *pypiAdapter) handleFile(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, r, http.StatusInternalServerError, "mutation prefetch", err)
 		return
 	}
-	rec, err := a.storage.Get(ctx.Ctx, ctx.ProjectKey, pkg, version, filename)
+	rec, err := a.storage.Get(ctx.Ctx, ctx.ProjectKey, name, version, filename)
 	if err == nil {
 		a.serveTrusted(w, r, ctx, rp, rec)
 		return
@@ -138,7 +169,49 @@ func (a *pypiAdapter) handleFile(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, r, http.StatusInternalServerError, "storage", err)
 		return
 	}
-	a.serveUntrusted(w, r, ctx, rp, pkg, version, filename)
+	a.serveUntrusted(w, r, ctx, rp, name, version, filename)
+}
+
+// handleUpstream serves an artifact addressed by its canonical upstream path
+// (/upstream/{host}/{path...}), so a lockfile that bakes absolute artifact URLs
+// (uv.lock, pdm.lock) can be converted to proxy URLs — and back — with a single
+// reversible string substitution.
+//
+// This is an ALIAS FOR THE TRUST KEY, NOT A PASSTHROUGH. {path...} is routing
+// decoration only: it is never fetched. The bytes are resolved exactly as
+// /files/ resolves them — the PEP 691 index for the derived name, matched by
+// filename — so this route can only name a (name, version, filename) triple
+// that /files/ can already name.
+func (a *pypiAdapter) handleUpstream(w http.ResponseWriter, r *http.Request) {
+	host := r.PathValue("host")
+	rest := r.PathValue("path")
+	if host == "" || rest == "" {
+		a.fail(w, r, http.StatusNotFound, "not found")
+		return
+	}
+	// Cheap inbound membership check against the SAME allowlist the upstream
+	// client fetches under. NOT CheckURL: that does DNS + private-IP checks and
+	// is for outbound fetches.
+	if !a.upstreamHosts.Allows(host) {
+		a.fail(w, r, http.StatusNotFound, "upstream host not allowlisted")
+		return
+	}
+	// TODO(#185 follow-up): optional `verify_upstream_path` — when {path...}
+	// matches packages/<2hex>/<2hex>/<60hex>/<filename>, that digest is the
+	// blake2b-256 of the artifact; verifying it against the served bytes binds
+	// the requested path to the bytes with a purely local check. It must run
+	// after the sha256 anchor is established and before writeFile (i.e. inside
+	// serveTrusted/serveUntrusted, via an expected-digest field threaded from
+	// here), and fail with 502 like the integrity-mismatch path. Deliberately
+	// out of scope here: the path prefix is decoration, and the sha256 trust
+	// anchor already gates every byte served.
+	filename := path.Base(rest)
+	name, err := pypifilename.ParseName(filename)
+	if err != nil || name == "" {
+		a.fail(w, r, http.StatusNotFound, "unparseable filename")
+		return
+	}
+	a.serveArtifact(w, r, NormalizeName(name), filename)
 }
 
 func (a *pypiAdapter) serveTrusted(w http.ResponseWriter, r *http.Request, ctx *pipeline.PipelineContext, rp *project.Resolved, rec Record) {
