@@ -232,18 +232,22 @@ func TestCveRetrievalCacheSurvivesRestart(t *testing.T) {
 		t.Fatalf("open db: %v", err)
 	}
 	t.Cleanup(func() { _ = d.Close() })
-	if _, err := d.ExecContext(ctx, `DELETE FROM middleware_retrieval_cvecheck_cache`); err != nil {
-		t.Fatalf("clean cache: %v", err)
-	}
 
 	osv, hits := countingOSV(t, []cveosv.Vuln{{ID: "CVE-2026-0001", Summary: "arbitrary code execution"}})
 	store := newMemStore()
 	pack, raw := buildPack(time.Now().Add(-30*24*time.Hour), []byte("TARBALL"))
 	client := &rawClient{pack: pack, raw: raw, tarball: []byte("TARBALL")}
 
+	// OpenStore applies the (idempotent) cache schema — clean AFTER it, not
+	// before, so the DELETE does not fail with "relation does not exist" when
+	// this test is the first to touch the table on a fresh database (test
+	// package ordering under `go test -p 1 ./...` decides that).
 	cache, err := cvecheckcache.OpenStore(ctx, d)
 	if err != nil {
 		t.Fatalf("open cache: %v", err)
+	}
+	if _, err := d.ExecContext(ctx, `DELETE FROM middleware_retrieval_cvecheck_cache`); err != nil {
+		t.Fatalf("clean cache: %v", err)
 	}
 
 	// First "instance": cache miss → OSV query → counts stored in Postgres.
