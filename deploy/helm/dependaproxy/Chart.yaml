@@ -2,8 +2,8 @@ apiVersion: v2
 name: dependaproxy
 description: Supply-chain-safe dependency proxy for npm, PyPI, Go modules and Maven
 type: application
-version: 0.1.0
-appVersion: "v0.0.5"
+version: 0.1.1
+appVersion: "v0.0.7"
 kubeVersion: ">=1.23.0-0"
 home: https://github.com/psenna/dependaproxy
 sources:
