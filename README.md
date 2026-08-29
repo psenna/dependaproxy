@@ -156,6 +156,11 @@ need nothing: `go.sum` is hash-only and `GOPROXY` is the redirect; a
 hash-pinned `requirements.txt` pins `name==version` + hashes and resolves
 through whatever index is configured.
 
+For an agent working in a sandbox whose only route to a registry is a
+DependaProxy instance, [`agent/skills/use-dependaproxy/SKILL.md`](agent/skills/use-dependaproxy/SKILL.md)
+packages the per-ecosystem client config, the meaning of a `403`, and this
+lockfile rewrite as a Claude Code skill.
+
 ## Configuration
 
 See `config.example.yaml`:
