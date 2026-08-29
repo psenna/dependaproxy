@@ -158,6 +158,34 @@ func TestDNSFailureFailsClosed(t *testing.T) {
 	}
 }
 
+func TestAllowlistAllows(t *testing.T) {
+	a := mustAllowlist(t, "https://pypi.org/simple", "files.pythonhosted.org")
+	if !a.Allows("pypi.org") {
+		t.Error("base host pypi.org should be allowed")
+	}
+	if !a.Allows("files.pythonhosted.org") {
+		t.Error("extra host files.pythonhosted.org should be allowed")
+	}
+	if !a.Allows("Files.PythonHosted.Org.") {
+		t.Error("host match must be case-insensitive and trailing-dot tolerant")
+	}
+	if !a.Allows("files.pythonhosted.org:8443") {
+		t.Error("a host:port must match the hostname-only entry (CheckURL compares hostnames too)")
+	}
+	if a.Allows("evil.example.com") {
+		t.Error("unknown host must not be allowed")
+	}
+	if a.Allows("evil.example.com:443") {
+		t.Error("unknown host with a port must not be allowed")
+	}
+	if a.Allows("") {
+		t.Error("empty host must not be allowed")
+	}
+	if (*Allowlist)(nil).Allows("x") {
+		t.Error("nil Allowlist must allow nothing")
+	}
+}
+
 func TestRedirectLimit(t *testing.T) {
 	var srv *httptest.Server
 	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

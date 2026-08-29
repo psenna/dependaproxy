@@ -56,6 +56,10 @@ func New(upstream string, extraAllowedHosts []string, httpClient *http.Client) (
 
 func (c *Client) indexURL(name string) string { return c.base + "/" + NormalizeName(name) + "/" }
 
+// Allowlist returns the upstream host allowlist this client fetches under, so
+// the routes can do a cheap inbound membership check on the alias route.
+func (c *Client) Allowlist() *registryhttp.Allowlist { return c.allow }
+
 func (c *Client) do(ctx context.Context, target string) (*http.Response, error) {
 	if err := c.allow.CheckURL(ctx, target); err != nil {
 		return nil, fmt.Errorf("pypi: %w", err)

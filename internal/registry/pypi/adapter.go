@@ -132,13 +132,19 @@ func Factory(ctx context.Context, cfg config.RegistryConfig, deps adapter.Deps) 
 
 	global := &project.Resolved{Validation: validation, Retrieval: retrieval, Mutation: mp, Cache: cache}
 	resolver := project.NewResolver(cfg.Type, reg, deps.ProjectStore, global, hooks)
+	// upstream_alias defaults to true: the alias never widens what can be
+	// requested (it names the same (name, version, filename) triple /files/
+	// already names) and lockfile portability is broken without it.
+	aliasEnabled := cfg.UpstreamAlias == nil || *cfg.UpstreamAlias
 	return &pypiAdapter{
-		prefix:   cfg.Prefix,
-		storage:  storage,
-		client:   client,
-		resolver: resolver,
-		tracker:  deps.DependencyTracker,
-		logger:   deps.Logger,
-		now:      deps.Now,
+		prefix:        cfg.Prefix,
+		storage:       storage,
+		client:        client,
+		resolver:      resolver,
+		tracker:       deps.DependencyTracker,
+		logger:        deps.Logger,
+		now:           deps.Now,
+		upstreamAlias: aliasEnabled,
+		upstreamHosts: client.Allowlist(),
 	}, nil
 }

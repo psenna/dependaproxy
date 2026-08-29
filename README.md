@@ -47,6 +47,11 @@ serve`. Validation rejection → 403; upstream 404 → 404; upstream error → 5
   `filetype`/`python_tag`/`abi_tag`/`platform_tag` (the architecture) + sha256 —
   PyPI has multiple files per version (wheels per platform + sdist), so the
   trust anchor is per-file. Min-publication-age reads per-file `upload-time`.
+  Optionally also serves a path-mirroring alias route
+  `/pypi/upstream/{host}/{path...}` (`upstream_alias`, default true) so a
+  canonical `uv.lock` / `pdm.lock` with absolute artifact URLs converts to proxy
+  URLs — and back — with one reversible substitution; see
+  [Lockfile portability](#lockfile-portability-uv--pdm--npm).
 - **maven** (`/maven/`): skeleton (maven-metadata model + 501 placeholder);
   full routing/storage is a future issue.
 - **goproxy** (`/goproxy/`): the **Go module proxy protocol** (GOPROXY). DependaProxy
@@ -82,6 +87,75 @@ malware/provenance scanning beyond the shared middleware set, and metadata
 caching (metadata endpoints are proxied through on each request; only the
 validated `.zip` is disk-cached and hash-verified).
 
+### Lockfile portability (uv / PDM / npm)
+
+Lock-driven installers fetch the **absolute URL baked into the lockfile**, not
+whatever index you configure. `uv sync --frozen` ignores `UV_DEFAULT_INDEX`,
+`--index` and `--find-links` for already-locked packages; `--locked` re-resolves
+and aborts on any change (astral-sh/uv
+[#19625](https://github.com/astral-sh/uv/issues/19625),
+[#9053](https://github.com/astral-sh/uv/issues/9053)). So to install a committed
+`uv.lock` through the proxy you rewrite the artifact URLs — reversibly.
+
+The pypi adapter serves `GET /pypi/upstream/{host}/{path...}` as an alias for
+`/pypi/files/{name}/{version}/{filename}`: `{host}` must be in the registry's
+upstream allowlist, the path is decoration and is never fetched, and the bytes
+are resolved through the **same trust flow and the same index lookup** as
+`/pypi/files/`. Nothing in validation is relaxed.
+
+**Verified recipe** (rewrite, sync, restore the canonical lock):
+
+```sh
+cp uv.lock /tmp/uv.lock.bak
+sed -i 's#https://files\.pythonhosted\.org/#http://dependaproxy:8080/pypi/upstream/files.pythonhosted.org/#g' uv.lock
+UV_DEFAULT_INDEX=http://dependaproxy:8080/pypi/simple uv sync --frozen --all-extras
+cp /tmp/uv.lock.bak uv.lock
+```
+
+`UV_DEFAULT_INDEX` is still needed — only to resolve `[build-system] requires`
+(e.g. hatchling); build-backend deps are not in `uv.lock`.
+
+The inverse restores the canonical URLs:
+
+```sh
+sed -i 's#http://dependaproxy:8080/pypi/upstream/#https://#g' uv.lock
+```
+
+Reversibility is the point: the **committed lock stays canonical** (CI, other
+developers, and `uv`'s own hash pinning are untouched), and the proxy rewrite is
+a build-time transform. Wire it as a git clean/smudge filter so the working tree
+can carry either form:
+
+```
+# .gitattributes
+uv.lock filter=dependaproxy
+```
+
+```sh
+git config filter.dependaproxy.clean  "sed 's#http://dependaproxy:8080/pypi/upstream/#https://#g'"
+git config filter.dependaproxy.smudge "sed 's#https://files\.pythonhosted\.org/#http://dependaproxy:8080/pypi/upstream/files.pythonhosted.org/#g'"
+```
+
+(or a `make sync` target that does the rewrite/sync/restore dance).
+
+**Auth:** the registry routes sit behind `auth.token`. With auth on, add a
+`.netrc` entry for the proxy host rather than baking `user:token@` into the
+committed lock.
+
+**Security:** the alias is an alias for the **trust key**, not a passthrough.
+`{host}` must be allowlisted, the path prefix is never fetched, and no validation
+is relaxed — a lock pinning a release younger than `min-publication-age` still
+`403`s (use `[tool.uv] exclude-newer` to keep the lock inside the window).
+
+**npm** needs nothing server-side: `/npm/{pkg}/-/{file}.tgz` already mirrors
+`registry.npmjs.org`, and `npm config set replace-registry-host=always` rewrites
+the `resolved` URLs in `package-lock.json` at install time (issue #156).
+
+**Go modules** and **pip `--require-hashes` / pip-tools `--generate-hashes`**
+need nothing: `go.sum` is hash-only and `GOPROXY` is the redirect; a
+hash-pinned `requirements.txt` pins `name==version` + hashes and resolves
+through whatever index is configured.
+
 ## Configuration
 
 See `config.example.yaml`:
@@ -92,7 +166,8 @@ See `config.example.yaml`:
 | `auth.token` | Static bearer token shared across all registries. Empty disables. |
 | `storage.type` / `storage.dsn` | Shared PostgreSQL (one pool; each adapter owns its table). |
 | `log.level` / `log.format` | `debug\|info\|warn\|error` and `json\|text`. |
-| `registries[]` | `{type, prefix, upstream, validation[], retrieval[], mutation[]}` per registry. |
+| `registries[]` | `{type, prefix, upstream, allowed_upstream_hosts[], upstream_alias, validation[], retrieval[], mutation[]}` per registry. |
+| `registries[].upstream_alias` | pypi only. Enable/disable the `/pypi/upstream/{host}/{path...}` lockfile-portability alias route. Default `true`. |
 
 ```yaml
 registries:
@@ -526,6 +601,7 @@ tests. The build is CGo-free except the race detector.
 - ☑ Adapter plugin model (new registry = one package + one `adapter.Register`)
 - ☑ npm adapter (packument + tarball, `dist.tarball` rewrite, `(name,version)` store)
 - ☑ pypi adapter (PEP 691 JSON, per-file store with platform/python/abi tags)
+- ☑ pypi lockfile portability (path-mirroring /pypi/upstream/{host}/{path...} alias; reversible one-line lock rewrite for uv/PDM)
 - ☑ sha256 trust anchor (per-artifact, constant-time verify, evict+refetch+reverify, 502 on persistent mismatch)
 - ☑ Minimum Publication Age (npm `time`; pypi per-file `upload-time`; fail-closed; injectable clock)
 - ☑ CVE / vulnerability validation (OSV.dev, npm + PyPI; deny/warn; fail-open/closed on source error)

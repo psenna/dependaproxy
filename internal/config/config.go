@@ -62,11 +62,20 @@ type RegistryConfig struct {
 	// fetch is validated against this allowlist to prevent SSRF via
 	// upstream-advertised URLs. The pypi adapter always includes
 	// files.pythonhosted.org (PyPI file URLs live there).
-	AllowedUpstreamHosts []string        `yaml:"allowed_upstream_hosts"`
-	Validation           []Middleware    `yaml:"validation"`
-	Retrieval            []Middleware    `yaml:"retrieval"`
-	Mutation             []Middleware    `yaml:"mutation"`
-	DenyList             *DenyListConfig `yaml:"deny_list"`
+	AllowedUpstreamHosts []string `yaml:"allowed_upstream_hosts"`
+	// UpstreamAlias enables the pypi path-mirroring alias route
+	// (GET <prefix>/upstream/{host}/{path...}), which serves an artifact
+	// addressed by its canonical upstream URL path so a lockfile with absolute
+	// artifact URLs (uv.lock, pdm.lock) converts to proxy URLs — and back —
+	// with one reversible substitution. The host must be in this registry's
+	// upstream allowlist; the path prefix is routing decoration and is never
+	// fetched. pypi only. Defaults to true; *bool distinguishes unset from an
+	// explicit false.
+	UpstreamAlias *bool           `yaml:"upstream_alias"`
+	Validation    []Middleware    `yaml:"validation"`
+	Retrieval     []Middleware    `yaml:"retrieval"`
+	Mutation      []Middleware    `yaml:"mutation"`
+	DenyList      *DenyListConfig `yaml:"deny_list"`
 }
 
 // DenyListConfig configures the deny-list recorder for one registry.

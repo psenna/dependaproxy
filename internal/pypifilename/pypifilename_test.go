@@ -72,3 +72,48 @@ func TestParseVersionEmpty(t *testing.T) {
 		t.Errorf("ParseVersion(bad.whl) = %q err=nil, want error", v)
 	}
 }
+
+func TestParseName(t *testing.T) {
+	cases := []struct {
+		filename, want string
+	}{
+		{"numpy-1.26.0-cp312-cp312-manylinux_2_17_x86_64.whl", "numpy"},
+		{"annotated_doc-0.0.5-py3-none-any.whl", "annotated_doc"},
+		{"pkg-1.0.0-1-py3-none-any.whl", "pkg"},
+		{"zope.interface-5.4.0-cp39-cp39-manylinux1_x86_64.whl", "zope.interface"},
+		{"ruamel.yaml.clib-0.2.8-cp312-cp312-manylinux_2_17_x86_64.whl", "ruamel.yaml.clib"},
+		{"foo-1.0.0.tar.gz", "foo"},
+		{"python-dateutil-2.9.0.post0.tar.gz", "python-dateutil"},
+		{"python_dateutil-2.9.0.post0.tar.gz", "python_dateutil"},
+		{"bar-2.3.4.zip", "bar"},
+	}
+	for _, c := range cases {
+		got, err := ParseName(c.filename)
+		if err != nil {
+			t.Errorf("ParseName(%q): %v", c.filename, err)
+			continue
+		}
+		if got != c.want {
+			t.Errorf("ParseName(%q) = %q, want %q", c.filename, got, c.want)
+		}
+	}
+}
+
+func TestParseNameEmptyOrInvalid(t *testing.T) {
+	// Degenerate sdists parse with a nil error but an empty name.
+	for _, fn := range []string{".tar.gz", "foo.tar.gz"} {
+		name, err := ParseName(fn)
+		if err != nil {
+			t.Errorf("ParseName(%q) err=%v, want nil", fn, err)
+		}
+		if name != "" {
+			t.Errorf("ParseName(%q) = %q, want \"\"", fn, name)
+		}
+	}
+	// Malformed wheel and empty filename error.
+	for _, fn := range []string{"bad.whl", ""} {
+		if name, err := ParseName(fn); err == nil {
+			t.Errorf("ParseName(%q) = %q err=nil, want error", fn, name)
+		}
+	}
+}

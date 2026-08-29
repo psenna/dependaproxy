@@ -96,6 +96,27 @@ func (a *Allowlist) CheckURL(ctx context.Context, rawURL string) error {
 	return nil
 }
 
+// Allows reports whether host is in the allowlist. Plain map membership: no
+// DNS, no private-IP check. Use it for INBOUND checks (validating a host that
+// appears in a request path); outbound fetches must use CheckURL. A nil
+// Allowlist allows nothing, so a zero-value holder fails closed.
+//
+// host may carry a port ("mirror.example.com:8443"): entries are stored
+// hostname-only (NewAllowlist adds url.Hostname(), and config strips the port
+// from allowed_upstream_hosts), so a port suffix is stripped before the lookup,
+// matching CheckURL's hostname-only comparison.
+func (a *Allowlist) Allows(host string) bool {
+	if a == nil {
+		return false
+	}
+	h := normalizeHost(host)
+	if hostOnly, _, err := net.SplitHostPort(h); err == nil {
+		h = hostOnly
+	}
+	_, ok := a.hosts[h]
+	return ok
+}
+
 // CheckRedirect is an http.Client.CheckRedirect that validates every redirect
 // hop against the allowlist and enforces a 10-hop limit (mirroring the
 // stdlib default policy, which is bypassed when CheckRedirect is set).

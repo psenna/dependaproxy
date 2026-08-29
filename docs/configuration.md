@@ -56,6 +56,29 @@ registries:
       - cdn.example.com
 ```
 
+### pypi upstream alias route (`upstream_alias`)
+
+The **pypi** adapter optionally serves a path-mirroring alias:
+
+```
+GET /pypi/upstream/{host}/{path...}
+```
+
+as an alias for `/pypi/files/{name}/{version}/{filename}`, so a canonical
+`uv.lock` / `pdm.lock` (absolute `files.pythonhosted.org` URLs) can be pointed at
+the proxy with one reversible substitution. Defaults to `true`; set
+`upstream_alias: false` to serve `/simple` + `/files` only.
+
+`{host}` is checked against the **same** `allowed_upstream_hosts` allowlist as
+plain membership (no DNS, no private-IP resolution — that check is for outbound
+fetches). `{path...}` is routing decoration and is never fetched: the bytes are
+resolved through the same trust flow, from the same PEP 691 index lookup, as
+`/pypi/files/`, so the route can only name a `(name, version, filename)` triple
+that `/pypi/files/` can already name. The route lives outside the simple-API
+namespace and is never advertised — PEP 503/691 index output is untouched.
+
+See [Examples #5](examples#5-lockfile-portability-install-a-canonical-uvlock-through-the-proxy).
+
 A registry's middleware lists configure its validation, retrieval, and mutation
 pipelines:
 

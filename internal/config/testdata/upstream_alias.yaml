@@ -1,0 +1,18 @@
+auth:
+  admin_token: "change-me-admin"
+storage:
+  type: postgres
+  dsn: "postgres://u:p@host:5432/db?sslmode=disable"
+registries:
+  # unset -> nil (the pypi adapter defaults it to true)
+  - type: pypi
+    prefix: /pypi
+    upstream: https://pypi.org/simple
+  - type: pypi
+    prefix: /pypi-on
+    upstream: https://pypi.org/simple
+    upstream_alias: true
+  - type: pypi
+    prefix: /pypi-off
+    upstream: https://pypi.org/simple
+    upstream_alias: false
