@@ -30,6 +30,7 @@ to get started; the full file is linked at the bottom.
 | npm | `npm` | `/npm` | `https://registry.npmjs.org` |
 | pypi | `pypi` | `/pypi` | `https://pypi.org/simple` |
 | maven (skeleton) | `maven` | `/maven` | `https://repo1.maven.org/maven2` |
+| oci (container registries) | `oci` | `/v2` (fixed) | one or more, via `upstreams[]` — see below |
 
 ### Upstream host allowlist (SSRF hardening)
 
@@ -107,6 +108,38 @@ registries:
       - {type: local-disk-cache, params: {path: /cache/pypi}}
       - {type: upstream-registry}
 ```
+
+### `oci` — container registries (`docker pull`)
+
+Pull-through proxy for the Docker Registry HTTP API v2. Unlike every other
+type, **one `oci` entry serves multiple upstream registries** — the
+registry-v2 protocol fixes the request root at `/v2`, so `prefix` must be
+exactly `/v2` and at most one `oci` entry may be configured.
+
+```yaml
+- type: oci
+  prefix: /v2
+  upstreams:
+    - name: docker
+      upstream: https://registry-1.docker.io
+      allowed_upstream_hosts: [auth.docker.io, production.cloudflare.docker.com]
+      validation:
+        - type: path-allowlist
+          params:
+            patterns: ["library/*"]
+```
+
+A client addresses an image as `<proxy>/<upstream name>/<repo>:<tag>` —
+`docker.io/library/nginx:latest` becomes
+`dependaproxy:8080/docker/library/nginx:latest`.
+
+- **`path-allowlist`** (validation) denies a pull whose repository path (the
+  part after the upstream name) does not match any of `patterns` — glob
+  syntax via Go's `path.Match`, where `*` does not cross a `/`. An empty
+  `patterns` list is a config error (it would deny everything).
+- v1 has **no caching** and targets **public upstreams only** (anonymous
+  auth) — no credential passthrough yet.
+- `deny_list` is not supported on an `oci` entry.
 
 ## Middleware types by stage
 

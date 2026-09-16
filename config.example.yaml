@@ -257,6 +257,40 @@ registries:
           path: /var/lib/dependaproxy/cache/goproxy
       - type: upstream-registry
 
+  # type: oci -- pull-through proxy for `docker pull`/`docker run`. Unlike
+  # every other type, ONE oci entry serves MULTIPLE upstream registries
+  # (the registry-v2 protocol fixes the request root at /v2, so prefix must
+  # be exactly "/v2" and there can be at most one oci entry). A client
+  # addresses an image as <this proxy>/<upstream name>/<repo>:<tag>, e.g.
+  # dependaproxy:8080/docker/library/nginx:latest or
+  # dependaproxy:8080/ghcr/psenna/ai-sandbox-agent:latest.
+  #
+  # v1 has NO caching (every pull re-fetches from upstream) and targets
+  # public upstreams only (anonymous auth). path-allowlist denies a pull
+  # whose repository path (the part after the upstream name) does not match
+  # any pattern -- "*" does not cross a "/", so "library/*" allows
+  # "library/nginx" but not "library/nginx/extra" or "someuser/nginx".
+  - type: oci
+    prefix: /v2
+    upstreams:
+      - name: docker
+        upstream: https://registry-1.docker.io
+        allowed_upstream_hosts:
+          - auth.docker.io
+          - production.cloudflare.docker.com
+        validation:
+          - type: path-allowlist
+            params:
+              patterns: ["library/*"]
+      - name: ghcr
+        upstream: https://ghcr.io
+        allowed_upstream_hosts:
+          - pkg-containers.githubusercontent.com
+        validation:
+          - type: path-allowlist
+            params:
+              patterns: ["*/*"]  # allow any owner/repo on ghcr.io
+
 # ---------------------------------------------------------------------------
 # Projects (per-project configuration + SBOM)
 # ---------------------------------------------------------------------------
