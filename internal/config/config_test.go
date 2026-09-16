@@ -166,3 +166,104 @@ func TestDefaults(t *testing.T) {
 		t.Errorf("default addr = %q", c.Server.Addr)
 	}
 }
+
+func TestValidateOCI(t *testing.T) {
+	base := func() *Config {
+		return &Config{
+			Auth:    Auth{AdminToken: "admin"},
+			Storage: Storage{Type: "postgres"},
+			Registries: []RegistryConfig{
+				{
+					Type:   "oci",
+					Prefix: "/v2",
+					Upstreams: []OCIUpstreamConfig{
+						{Name: "docker", Upstream: "https://registry-1.docker.io"},
+					},
+				},
+			},
+		}
+	}
+
+	t.Run("valid minimal oci config", func(t *testing.T) {
+		c := base()
+		if err := c.Validate(); err != nil {
+			t.Fatalf("Validate() = %v, want nil", err)
+		}
+	})
+
+	t.Run("wrong prefix rejected", func(t *testing.T) {
+		c := base()
+		c.Registries[0].Prefix = "/oci"
+		if err := c.Validate(); err == nil || !strings.Contains(err.Error(), `prefix must be "/v2"`) {
+			t.Fatalf("Validate() = %v, want an error mentioning the fixed /v2 prefix", err)
+		}
+	})
+
+	t.Run("empty upstreams rejected", func(t *testing.T) {
+		c := base()
+		c.Registries[0].Upstreams = nil
+		if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "upstreams") {
+			t.Fatalf("Validate() = %v, want an error mentioning upstreams", err)
+		}
+	})
+
+	t.Run("duplicate upstream names rejected", func(t *testing.T) {
+		c := base()
+		c.Registries[0].Upstreams = append(c.Registries[0].Upstreams, OCIUpstreamConfig{Name: "docker", Upstream: "https://ghcr.io"})
+		if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "duplicate upstream name") {
+			t.Fatalf("Validate() = %v, want an error mentioning a duplicate upstream name", err)
+		}
+	})
+
+	t.Run("upstream name with a slash rejected", func(t *testing.T) {
+		c := base()
+		c.Registries[0].Upstreams[0].Name = "docker/hub"
+		if err := c.Validate(); err == nil {
+			t.Fatal("Validate() = nil, want an error: upstream name must be a single path segment")
+		}
+	})
+
+	t.Run("empty upstream url rejected", func(t *testing.T) {
+		c := base()
+		c.Registries[0].Upstreams[0].Upstream = ""
+		if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "upstream is required") {
+			t.Fatalf("Validate() = %v, want an error mentioning upstream is required", err)
+		}
+	})
+
+	t.Run("deny_list set on oci entry rejected", func(t *testing.T) {
+		c := base()
+		enabled := true
+		c.Registries[0].DenyList = &DenyListConfig{Enabled: &enabled}
+		if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "deny_list is not supported") {
+			t.Fatalf("Validate() = %v, want an error rejecting deny_list on an oci entry", err)
+		}
+	})
+
+	t.Run("flat upstream field ignored, not required, for oci", func(t *testing.T) {
+		c := base()
+		c.Registries[0].Upstream = "" // the flat field is meaningless for oci; must not trip "upstream is required"
+		if err := c.Validate(); err != nil {
+			t.Fatalf("Validate() = %v, want nil (flat Upstream is not used by type: oci)", err)
+		}
+	})
+
+	t.Run("per-upstream validation middleware type is checked", func(t *testing.T) {
+		c := base()
+		c.Registries[0].Upstreams[0].Validation = []Middleware{{Type: ""}}
+		if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "middleware type is required") {
+			t.Fatalf("Validate() = %v, want an error about the empty middleware type", err)
+		}
+	})
+
+	t.Run("per-upstream allowed_upstream_hosts normalized", func(t *testing.T) {
+		c := base()
+		c.Registries[0].Upstreams[0].AllowedUpstreamHosts = []string{"  Auth.Docker.IO  "}
+		if err := c.Validate(); err != nil {
+			t.Fatalf("Validate() = %v, want nil", err)
+		}
+		if got := c.Registries[0].Upstreams[0].AllowedUpstreamHosts[0]; got != "auth.docker.io" {
+			t.Errorf("AllowedUpstreamHosts[0] = %q, want normalized %q", got, "auth.docker.io")
+		}
+	})
+}
