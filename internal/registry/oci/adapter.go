@@ -157,7 +157,7 @@ func (a *ociAdapter) serveManifest(w http.ResponseWriter, r *http.Request, u *oc
 	}
 	w.Header().Set("Docker-Content-Digest", m.Digest)
 	w.Header().Set("Content-Type", m.MediaType)
-	_, _ = w.Write(m.Bytes)
+	_, _ = w.Write(m.Bytes) //nolint:gosec // G705: a proxy writes upstream content by design
 }
 
 func (a *ociAdapter) serveBlob(w http.ResponseWriter, r *http.Request, u *ociUpstream, repoPath, digest string) {
@@ -176,5 +176,5 @@ func (a *ociAdapter) serveBlob(w http.ResponseWriter, r *http.Request, u *ociUps
 	}
 	w.Header().Set("Docker-Content-Digest", digest)
 	w.Header().Set("Content-Type", mediaType)
-	_, _ = w.Write(data)
+	_, _ = w.Write(data) //nolint:gosec // G705: a proxy writes upstream content by design
 }

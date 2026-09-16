@@ -88,7 +88,7 @@ func (c *Client) GetBlob(ctx context.Context, repoPath, digest string) ([]byte, 
 	if err != nil {
 		return nil, "", err
 	}
-	defer rc.Close()
+	defer func() { _ = rc.Close() }()
 	data, err := io.ReadAll(rc)
 	if err != nil {
 		return nil, "", err
