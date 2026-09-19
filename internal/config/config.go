@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"regexp"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -76,6 +77,28 @@ type RegistryConfig struct {
 	Retrieval     []Middleware    `yaml:"retrieval"`
 	Mutation      []Middleware    `yaml:"mutation"`
 	DenyList      *DenyListConfig `yaml:"deny_list"`
+	// Upstreams is set ONLY for type: oci -- the named upstream registries
+	// this single /v2-mounted adapter instance routes between. Every other
+	// adapter type has exactly one Upstream (the flat field above) and
+	// leaves this nil. See OCIUpstreamConfig.
+	Upstreams []OCIUpstreamConfig `yaml:"upstreams"`
+}
+
+// OCIUpstreamConfig is one named upstream container registry a type: oci
+// adapter instance routes to. Name is the leading path segment a client
+// selects it with (dependaproxy:8080/<name>/<repo>:<tag>) -- it becomes part
+// of the repository name the Docker/OCI client itself parses, so it must be
+// a single valid path segment (no slashes).
+//
+// Unlike every other adapter type, an oci upstream has no Retrieval or
+// Mutation chain in v1 (no caching yet -- see the design spec) and no
+// project-scoped override support (the registry-v2 URL space has no room
+// for a project-key segment without colliding with Name).
+type OCIUpstreamConfig struct {
+	Name                 string       `yaml:"name"`
+	Upstream             string       `yaml:"upstream"`
+	AllowedUpstreamHosts []string     `yaml:"allowed_upstream_hosts"`
+	Validation           []Middleware `yaml:"validation"`
 }
 
 // DenyListConfig configures the deny-list recorder for one registry.
@@ -153,6 +176,10 @@ func (c *Config) Validate() error {
 		} else {
 			seen[p] = true
 		}
+		if r.Type == "oci" {
+			errs = append(errs, validateOCIRegistry(i, r)...)
+			continue
+		}
 		if strings.TrimSpace(r.Upstream) == "" {
 			errs = append(errs, fmt.Sprintf("registries[%d]: upstream is required", i))
 		}
@@ -175,6 +202,58 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("invalid config: %s", strings.Join(errs, "; "))
 	}
 	return nil
+}
+
+// ociUpstreamNameRE matches a single Docker/OCI repository-name path
+// segment: lowercase alphanumerics separated by single ., _, or - (the
+// subset of the distribution spec's name-component grammar that is safe to
+// use as a leading path segment we later strip).
+var ociUpstreamNameRE = regexp.MustCompile(`^[a-z0-9]+(?:[._-][a-z0-9]+)*$`)
+
+// validateOCIRegistry validates the type: oci-specific shape of registries[i]
+// (r.Prefix has already been checked as non-empty/unique by the shared code
+// above). The flat Upstream/AllowedUpstreamHosts/Validation/Retrieval/
+// Mutation/UpstreamAlias fields are meaningless for oci and are NOT checked
+// here even if set -- Load simply never reads them for this type.
+func validateOCIRegistry(i int, r *RegistryConfig) []string {
+	var errs []string
+	if strings.TrimRight(r.Prefix, "/") != "/v2" {
+		errs = append(errs, fmt.Sprintf("registries[%d]: prefix must be \"/v2\" for type: oci (got %q)", i, r.Prefix))
+	}
+	if r.DenyList != nil {
+		errs = append(errs, fmt.Sprintf("registries[%d]: deny_list is not supported for type: oci in v1", i))
+	}
+	if len(r.Upstreams) == 0 {
+		errs = append(errs, fmt.Sprintf("registries[%d]: at least one entry in upstreams is required for type: oci", i))
+		return errs
+	}
+	seenNames := map[string]bool{}
+	for j := range r.Upstreams {
+		u := &r.Upstreams[j]
+		name := strings.TrimSpace(u.Name)
+		if name == "" {
+			errs = append(errs, fmt.Sprintf("registries[%d].upstreams[%d]: name is required", i, j))
+		} else if !ociUpstreamNameRE.MatchString(name) {
+			errs = append(errs, fmt.Sprintf("registries[%d].upstreams[%d]: name %q must be a single lowercase path segment", i, j, name))
+		} else if seenNames[name] {
+			errs = append(errs, fmt.Sprintf("registries[%d].upstreams[%d]: duplicate upstream name %q", i, j, name))
+		} else {
+			seenNames[name] = true
+		}
+		if strings.TrimSpace(u.Upstream) == "" {
+			errs = append(errs, fmt.Sprintf("registries[%d].upstreams[%d]: upstream is required", i, j))
+		}
+		for k, h := range u.AllowedUpstreamHosts {
+			norm, err := normalizeAllowedHost(h)
+			if err != nil {
+				errs = append(errs, fmt.Sprintf("registries[%d].upstreams[%d].allowed_upstream_hosts[%d]: %v", i, j, k, err))
+				continue
+			}
+			u.AllowedUpstreamHosts[k] = norm
+		}
+		errs = append(errs, validateMiddlewares(fmt.Sprintf("registries[%d].upstreams[%d].validation", i, j), u.Validation)...)
+	}
+	return errs
 }
 
 func validateMiddlewares(name string, ms []Middleware) []string {

@@ -73,15 +73,18 @@ jobs:
           govulncheck ./...
 
       # Real S3-compatible backend for the s3-cache integration tests. Started as
-      # a step (not a service container) because the minio/minio image's default
-      # command prints usage and exits — GitHub Actions services can't pass
+      # a step (not a service container) because the image's default command
+      # prints usage and exits — GitHub Actions services can't pass
       # `server /data` as a command, so we start it here with the right args and
-      # wait for it to be healthy before the tests run.
+      # wait for it to be healthy before the tests run. Pulled from pgsty/silo
+      # (an AGPLv3 MinIO fork), not minio/minio: MinIO Inc. has been pulling
+      # distribution from Docker Hub, and quay.io/minio/minio is on the same
+      # trajectory as its source closes -- see docs/development.md.
       - name: start minio (S3-cache integration tests)
         run: |
           docker run -d --name minio -p 9000:9000 \
             -e MINIO_ROOT_USER=dependaproxy -e MINIO_ROOT_PASSWORD=changeme \
-            minio/minio server /data
+            pgsty/silo server /data
           for i in $(seq 1 40); do
             if curl -sf -o /dev/null http://localhost:9000/minio/health/live; then
               echo "minio ready"

@@ -25,7 +25,7 @@ make fmt-check   # fail on gofmt drift
 make lint        # golangci-lint
 make vuln        # govulncheck
 make tidy        # go mod tidy
-make minio       # start a local minio/minio server for the S3-cache tests
+make minio       # start a local pgsty/silo server for the S3-cache tests
 make stop-db     # stop postgres
 make stop-minio  # stop minio
 make clean       # remove cover.out / cover.html
@@ -47,7 +47,9 @@ make test
 
 S3-cache integration tests read `DP_TEST_MINIO_ENDPOINT` /
 `DP_TEST_MINIO_ACCESS_KEY` / `DP_TEST_MINIO_SECRET_KEY` and skip when unset
-(`make minio` starts a local server; CI runs them against a real `minio/minio`).
+(`make minio` starts a local server; CI runs them against a real
+`pgsty/silo`, an AGPLv3 MinIO fork — minio/minio was pulled from Docker Hub,
+and quay.io/minio/minio is on the same trajectory as MinIO's source closes).
 
 ## CI
 
