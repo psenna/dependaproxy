@@ -11,7 +11,9 @@
 
 GOLANG_IMAGE  ?= golang:1.25
 POSTGRES_IMAGE ?= postgres:18
-MINIO_IMAGE   ?= minio/minio
+# quay.io, not Docker Hub: minio/minio was removed from Docker Hub (upstream
+# moved distribution to quay.io/minio/minio).
+MINIO_IMAGE   ?= quay.io/minio/minio
 DOCKER        ?= docker
 
 CURDIR        := $(shell pwd)
