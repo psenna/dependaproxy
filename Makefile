@@ -11,7 +11,10 @@
 
 GOLANG_IMAGE  ?= golang:1.25
 POSTGRES_IMAGE ?= postgres:18
-MINIO_IMAGE   ?= minio/minio
+# pgsty/silo (an AGPLv3 MinIO fork), not minio/minio: MinIO Inc. has been
+# pulling distribution from Docker Hub, and quay.io/minio/minio is on the
+# same trajectory as its source closes.
+MINIO_IMAGE   ?= pgsty/silo
 DOCKER        ?= docker
 
 CURDIR        := $(shell pwd)
