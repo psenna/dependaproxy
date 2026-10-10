@@ -35,8 +35,10 @@ describe('LoginPage', () => {
     renderLogin()
     await user.type(screen.getByPlaceholderText('Admin token'), 'tok-123')
     await user.click(screen.getByRole('button', { name: /sign in/i }))
+    // The login flow is async (probe -> setToken -> navigate); wait for the
+    // redirect rather than asserting synchronously (flaky under load).
+    expect(await screen.findByTestId('home')).toBeInTheDocument()
     expect(getToken()).toBe('tok-123')
-    expect(screen.getByTestId('home')).toBeInTheDocument()
   })
 
   it('shows an error for an invalid token and stays on the login page', async () => {
