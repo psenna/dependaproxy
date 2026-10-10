@@ -70,6 +70,12 @@ as an alias for `/pypi/files/{name}/{version}/{filename}`, so a canonical
 the proxy with one reversible substitution. Defaults to `true`; set
 `upstream_alias: false` to serve `/simple` + `/files` only.
 
+This route is only present in builds that include #185/#186 (merged one
+commit after `v0.0.7`). A deployment running an older pinned image doesn't
+have the handler registered at all, regardless of this config value — a
+request to it falls through to Go's stdlib default-mux `404 page not found`,
+not this adapter's own (descriptive) 404.
+
 `{host}` is checked against the **same** `allowed_upstream_hosts` allowlist as
 plain membership (no DNS, no private-IP resolution — that check is for outbound
 fetches). `{path...}` is routing decoration and is never fetched: the bytes are
