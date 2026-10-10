@@ -14,7 +14,7 @@ COPY web/ .
 RUN npm run build
 
 # Stage 1: build the binary with the pinned Go toolchain.
-FROM golang:1.25 AS build
+FROM golang:1.26 AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download

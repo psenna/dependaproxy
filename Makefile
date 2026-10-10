@@ -32,7 +32,7 @@ DOCKER_RUN    := $(DOCKER) run --rm -v "$(CURDIR):/work" -w /work \
 	-e DP_TEST_PG_DSN -e DP_TEST_MINIO_ENDPOINT -e DP_TEST_MINIO_ACCESS_KEY -e DP_TEST_MINIO_SECRET_KEY \
 	$(GOLANG_IMAGE)
 # The race detector needs CGo (it links the race runtime via gcc). The
-# golang:1.25 image ships gcc, so enable CGo only for the race test target.
+# golang:1.26 image ships gcc, so enable CGo only for the race test target.
 DOCKER_RUN_RACE := $(DOCKER_RUN) -e CGO_ENABLED=1
 
 # Web (Vite + React + TS) targets run inside disposable node/playwright
@@ -55,7 +55,7 @@ DOCKER_RUN_E2E := $(DOCKER) run --rm -v "$(CURDIR):/work" -w /work/web \
 
 # Pin tool versions for reproducibility. golangci-lint is installed via
 # `go install` so it is built with the project's Go toolchain (a prebuilt
-# v2.0.x binary is built with go1.24 and refuses a go1.25 target).
+# v2.0.x binary is built with go1.24 and refuses a newer target, e.g. go1.26).
 GOLANGCI_LINT_VERSION := v2.12.2
 GOVULNCHECK_VERSION   := latest
 
