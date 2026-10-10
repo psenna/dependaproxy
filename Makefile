@@ -9,7 +9,7 @@
 # repo), so they persist across runs without polluting the working tree (which
 # would make gofmt/golangci-lint scan the module-cache testdata).
 
-GOLANG_IMAGE  ?= golang:1.25
+GOLANG_IMAGE  ?= golang:1.26
 POSTGRES_IMAGE ?= postgres:18
 # pgsty/silo (an AGPLv3 MinIO fork), not minio/minio: MinIO Inc. has been
 # pulling distribution from Docker Hub, and quay.io/minio/minio is on the
