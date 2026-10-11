@@ -103,6 +103,12 @@ upstream allowlist, the path is decoration and is never fetched, and the bytes
 are resolved through the **same trust flow and the same index lookup** as
 `/pypi/files/`. Nothing in validation is relaxed.
 
+This route shipped in #185/#186, one commit after the `v0.0.7` tag — a
+deployment pinned to `v0.0.7` or earlier doesn't have it. A miss there is a
+bare Go stdlib `404 page not found` (not this adapter's own `fail()`, which
+always writes a descriptive reason), so that exact body is how you tell
+"old build" apart from "name/host genuinely not found."
+
 **Verified recipe** (rewrite, sync, restore the canonical lock):
 
 ```sh
@@ -147,9 +153,13 @@ committed lock.
 is relaxed — a lock pinning a release younger than `min-publication-age` still
 `403`s (use `[tool.uv] exclude-newer` to keep the lock inside the window).
 
-**npm** needs nothing server-side: `/npm/{pkg}/-/{file}.tgz` already mirrors
-`registry.npmjs.org`, and `npm config set replace-registry-host=always` rewrites
-the `resolved` URLs in `package-lock.json` at install time (issue #156).
+**npm** usually needs nothing at all: `/npm/{pkg}/-/{file}.tgz` already mirrors
+`registry.npmjs.org`, and npm ≥ 9.10 defaults `replace-registry-host` to
+`npmjs`, which already rewrites a `registry.npmjs.org` `resolved` URL in
+`package-lock.json` at install time with no config and no file edits (issue
+#156). Only a pre-9.10 npm, an operator override to `never`, or a non-npmjs
+mirror host in `resolved` needs the explicit
+`npm config set replace-registry-host=always`.
 
 **Go modules** and **pip `--require-hashes` / pip-tools `--generate-hashes`**
 need nothing: `go.sum` is hash-only and `GOPROXY` is the redirect; a

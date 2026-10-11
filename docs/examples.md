@@ -89,9 +89,12 @@ No validation is relaxed: a lock pinning a release younger than
 `auth.token` set, add a `.netrc` entry for the proxy host rather than baking
 `user:token@` into the lock.
 
-**npm:** nothing server-side — `/npm/{pkg}/-/{file}.tgz` already mirrors
-`registry.npmjs.org`; `npm config set replace-registry-host=always` rewrites the
-`resolved` URLs in `package-lock.json` at install time.
+**npm:** usually nothing at all — `/npm/{pkg}/-/{file}.tgz` already mirrors
+`registry.npmjs.org`, and npm ≥ 9.10 defaults `replace-registry-host` to
+`npmjs`, which already rewrites a `registry.npmjs.org` `resolved` URL at
+install time with no config. `npm config set replace-registry-host=always` is
+only needed for a pre-9.10 npm, an operator override, or a non-npmjs mirror
+host in `resolved`.
 
 **Go modules** and pip `--require-hashes` / pip-tools `--generate-hashes` need
 nothing: `go.sum` is hash-only with `GOPROXY` as the redirect, and a hash-pinned
