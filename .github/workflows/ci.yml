@@ -10,10 +10,10 @@ permissions:
   contents: read
 
 env:
-  GO_VERSION: "1.25"
+  GO_VERSION: "1.26.9"
   # golangci-lint is installed via `go install` so it is built with the same
   # Go toolchain as the project (a prebuilt v2.0.x binary is built with go1.24
-  # and refuses a go1.25 target).
+  # and refuses a newer target, e.g. go1.26).
   GOLANGCI_LINT_VERSION: "v2.12.2"
 
 jobs:
